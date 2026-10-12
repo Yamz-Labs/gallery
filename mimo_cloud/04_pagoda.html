@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌸 Voxel Pagoda Garden</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#87CEEB}
+canvas{display:block}
+#ui{position:absolute;top:0;left:0;width:100%;text-align:center;pointer-events:none;z-index:10;padding-top:15px}
+#title{font:300 26px/1.3 sans-serif;color:rgba(255,255,255,.9);letter-spacing:6px;text-shadow:0 2px 10px rgba(0,0,0,.3)}
+#sub{font:13px/1.6 sans-serif;color:rgba(255,255,255,.5);margin-top:3px;text-shadow:0 1px 3px rgba(0,0,0,.3)}
+</style>
+</head>
+<body>
+<div id="ui"><div id="title">🌸 PAGODA GARDEN 🌸</div><div id="sub">Drag to orbit • Scroll to zoom • Touch supported</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ================================================================
+   SCENE SETUP
+   ================================================================ */
+const W=innerWidth,H=innerHeight;
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x87CEEB);
+scene.fog=new THREE.Fog(0x87CEEB,70,180);
+
+const camera=new THREE.PerspectiveCamera(50,W/H,0.1,300);
+camera.position.set(55,40,55);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(W,H);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const sun=new THREE.DirectionalLight(0xfff5e0,1.0);
+sun.position.set(50,80,30);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.left=-60;sun.shadow.camera.right=60;
+sun.shadow.camera.top=60;sun.shadow.camera.bottom=-60;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x6688bb,0.5));
+scene.add(new THREE.HemisphereLight(0x88bbee,0x44aa44,0.4));
+
+/* ================================================================
+   ORBIT CONTROLS (self-contained)
+   ================================================================ */
+const camTgt=new THREE.Vector3(0,10,0);
+let cTh=0.785,cPh=1.18,cR=85,cThT=cTh,cPhT=cPh,cRT=cR;
+let dragging=false,px=0,py=0;
+function updateCam(){
+    cTh+=(cThT-cTh)*0.08;cPh+=(cPhT-cPh)*0.08;cR+=(cRT-cR)*0.08;
+    cPh=Math.max(0.1,Math.min(Math.PI*0.47,cPh));
+    cR=Math.max(15,Math.min(160,cR));
+    camera.position.set(
+        camTgt.x+cR*Math.sin(cPh)*Math.sin(cTh),
+        camTgt.y+cR*Math.cos(cPh),
+        camTgt.z+cR*Math.sin(cPh)*Math.cos(cTh)
+    );
+    camera.lookAt(camTgt);
+}
+const cvs=renderer.domElement;
+cvs.addEventListener('mousedown',e=>{if(e.button===0){dragging=true;px=e.clientX;py=e.clientY;}});
+window.addEventListener('mousemove',e=>{
+    if(dragging){cThT-=(e.clientX-px)*0.005;cPhT-=(e.clientY-py)*0.005;px=e.clientX;py=e.clientY;}
+});
+window.addEventListener('mouseup',()=>dragging=false);
+cvs.addEventListener('contextmenu',e=>e.preventDefault());
+cvs.addEventListener('wheel',e=>{e.preventDefault();cRT+=e.deltaY*0.1;},{passive:false});
+let tD=0,tP={x:0,y:0};
+cvs.addEventListener('touchstart',e=>{
+    if(e.touches.length===1){dragging=true;tP={x:e.touches[0].clientX,y:e.touches[0].clientY};}
+    else if(e.touches.length===2)tD=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+},{passive:true});
+cvs.addEventListener('touchmove',e=>{
+    e.preventDefault();
+    if(e.touches.length===1&&dragging){cThT-=(e.touches[0].clientX-tP.x)*0.005;cPhT-=(e.touches[0].clientY-tP.y)*0.005;tP={x:e.touches[0].clientX,y:e.touches[0].clientY};}
+    else if(e.touches.length===2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);cRT*=tD/d;tD=d;}
+},{passive:false});
+cvs.addEventListener('touchend',()=>dragging=false);
+
+/* ================================================================
+   COLOR PALETTE
+   ================================================================ */
+const C={
+    rW:'#cc2030',rD:'#8b1520',rL:'#e83545',
+    g:'#daa520',gB:'#ffd700',gD:'#b8860b',
+    rG:'#1b6b3a',rGD:'#14532d',rGL:'#2d8b57',
+    rT:'#008b8b',rTD:'#006666',
+    w:'#8b4513',wD:'#654321',wL:'#a0522d',
+    st:'#666666',stL:'#888888',stD:'#555555',
+    stP:'#b8b8a0',stPD:'#a0a090',
+    gr:'#228b22',grL:'#32cd32',grD:'#1b7b1b',grM:'#2e8b57',grY:'#3cb371',
+    dirt:'#8b7355',dirtD:'#6b5535',
+    wa:'#1e90ff',waL:'#4169e1',waD:'#0066cc',waT:'#00ced1',
+    ch1:'#ffb7c5',ch2:'#ff69b4',ch3:'#fff0f5',ch4:'#ffe4e1',ch5:'#ffc0cb',ch6:'#dda0dd',
+    chT:'#5c3317',
+    lv1:'#228b22',lv2:'#006400',lv3:'#2e8b57',lv4:'#3cb371',lv5:'#256e35',trk:'#6b4423',
+    pn1:'#1a4d1a',pn2:'#2d5d2d',pn3:'#3d7d3d',
+    bm:'#7cfc00',bmD:'#556b2f',bmL:'#90ee90',
+    flR:'#ff0000',flP:'#ff69b4',flY:'#ffd700',flPu:'#9370db',flO:'#ff6347',flB:'#4169e1',flW:'#ffffff',stem:'#2d8b2d',
+    tor:'#dc143c',torD:'#a00020',
+    cl:'#ffffff',clL:'#f0f0ff',
+    koi:'#ff4500',koiW:'#ffffff',
+    rk:'#696969',rkL:'#808080',rkD:'#505050',
+    blk:'#111111',lant:'#ffa500',moss:'#556b2f'
+};
+
+/* ================================================================
+   VOXEL BUILDER
+   ================================================================ */
+const vox=new Map();
+function vs(x,y,z,c){const a=Math.round(x),b=Math.round(y),d=Math.round(z);vox.set(a+','+b+','+d,{x:a,y:b,z:d,c});}
+function vf(x1,y1,z1,x2,y2,z2,c){
+    for(let x=Math.min(x1,x2);x<=Math.max(x1,x2);x++)
+    for(let y=Math.min(y1,y2);y<=Math.max(y1,y2);y++)
+    for(let z=Math.min(z1,z2);z<=Math.max(z1,z2);z++)vs(x,y,z,c);
+}
+function fl(x1,z1,x2,z2,y,c){for(let x=x1;x<=x2;x++)for(let z=z1;z<=z2;z++)vs(x,y,z,c);}
+function hsh(x,z){let h=((x|0)*374761393+(z|0)*668265263);h=(h^(h>>>13))*1274126177;return((h^(h>>>16))>>>0)/4294967295;}
+
+/* ================================================================
+   GROUND
+   ================================================================ */
+function onPath(x,z){
+    if(Math.abs(x)<=1&&z>=10&&z<=28)return true;
+    const d=Math.sqrt(x*x+z*z);
+    if(d>=10.5&&d<=13.5)return true;
+    if(Math.abs(z)<=1&&x>=13&&x<=28)return true;
+    if(Math.abs(z)<=1&&x>=-28&&x<=-13)return true;
+    return false;
+}
+function buildGround(){
+    const sz=33;
+    for(let x=-sz;x<=sz;x++)for(let z=-sz;z<=sz;z++){
+        const d=Math.sqrt(x*x+z*z);if(d>sz+2)continue;
+        const h=hsh(x,z);let c;
+        if(onPath(x,z))c=h<0.5?C.stP:C.stPD;
+        else if(d>sz-1)c=h<0.5?C.dirt:C.dirtD;
+        else c=h<0.15?C.gr:h<0.35?C.grL:h<0.5?C.grD:h<0.7?C.grM:C.grY;
+        vs(x,0,z,c);
+        if(h>0.94&&d<sz-4&&!onPath(x,z))vs(x,1,z,h>0.97?C.grL:C.grY);
+    }
+}
+
+/* ================================================================
+   PAGODA
+   ================================================================ */
+function buildWalls(hw,yb,yt){
+    for(let x=-hw;x<=hw;x++)for(let z=-hw;z<=hw;z++){
+        if(Math.abs(x)!==hw&&Math.abs(z)!==hw)continue;
+        const corner=Math.abs(x)===hw&&Math.abs(z)===hw;
+        const center=(Math.abs(x)<=1&&Math.abs(z)===hw)||(Math.abs(z)<=1&&Math.abs(x)===hw);
+        const dh=Math.floor((yt-yb)*0.7);
+        for(let y=yb;y<=yt;y++){
+            if(center&&!corner&&hw>=3&&y<yb+dh)continue;
+            if(center&&!corner&&hw>=4&&y===yb+dh)continue;
+            vs(x,y,z,corner?C.rD:C.rW);
+        }
+    }
+}
+function buildRoof(inner,outer,peak,rc,tc){
+    for(let dx=-outer;dx<=outer;dx++)for(let dz=-outer;dz<=outer;dz++){
+        const ch=Math.max(Math.abs(dx),Math.abs(dz));
+        let y=peak;
+        if(ch>inner)y=peak-(ch-inner);
+        if(ch>=outer-1){
+            const cn=Math.min(Math.abs(dx),Math.abs(dz));
+            const ex=Math.max(0,cn-Math.floor(outer/2));
+            y+=Math.min(ex,3);
+        }
+        vs(dx,y,dz,rc);vs(dx,y-1,dz,rc);
+        if(ch>=outer){vs(dx,y,dz,tc);vs(dx,y-1,dz,tc);}
+        else if(Math.abs(dx)===Math.abs(dz)&&ch>0)vs(dx,y,dz,tc);
+    }
+}
+function buildSpire(y0){
+    for(let i=0;i<9;i++){
+        const y=y0+i;
+        if(i<3){vs(0,y,0,C.gB);vs(1,y,0,C.g);vs(-1,y,0,C.g);vs(0,y,1,C.g);vs(0,y,-1,C.g);}
+        else if(i<6){vs(0,y,0,C.gB);if(i<5){vs(1,y,0,C.gD);vs(-1,y,0,C.gD);vs(0,y,1,C.gD);vs(0,y,-1,C.gD);}}
+        else vs(0,y,0,C.gB);
+    }
+    vs(0,y0+9,0,C.gB);
+}
+function buildPagoda(){
+    vf(-10,0,-10,10,0,10,C.st);vf(-9,1,-9,9,1,9,C.stL);vf(-8,2,-8,8,2,8,C.st);
+    fl(-5,11,5,13,1,C.stL);fl(-4,14,4,15,2,C.st);fl(-3,16,3,17,3,C.stL);
+    // T1
+    fl(-7,-7,7,7,3,C.w);buildRoof(7,10,8,C.rG,C.rW);buildWalls(7,4,7);
+    // T2
+    fl(-5,-5,5,5,8,C.w);buildRoof(5,8,13,C.rGD,C.rW);buildWalls(5,9,12);
+    // T3
+    fl(-4,-4,4,4,13,C.w);buildRoof(4,7,18,C.rT,C.g);buildWalls(4,14,17);
+    // T4
+    fl(-3,-3,3,3,18,C.w);buildRoof(3,5,22,C.rTD,C.g);buildWalls(3,19,21);
+    // T5
+    fl(-2,-2,2,2,22,C.w);buildRoof(2,4,26,C.rGL,C.gB);buildWalls(2,23,25);
+    buildSpire(27);
+    // Decorations
+    const bell=[[10,10],[10,-10],[-10,10],[-10,-10]];
+    for(const[bx,bz]of bell){vs(bx,6,bz,C.g);vs(bx,5,bz,C.gB);}
+    for(const[lx,lz]of[[-5,10],[5,10],[-5,-10],[5,-10],[10,-5],[10,5],[-10,-5],[-10,5]]){
+        const ch=Math.max(Math.abs(lx),Math.abs(lz));
+        let ly=8;if(ch>7)ly=8-(ch-7);
+        const cn=Math.min(Math.abs(lx),Math.abs(lz));
+        if(ch>=9&&cn>5)ly+=Math.min(cn-5,3);
+        vs(lx,ly-1,lz,C.wD);vs(lx,ly-2,lz,'#ff2020');vs(lx,ly-3,lz,'#ff4040');
+    }
+    for(let x=-8;x<=8;x++)for(let z=-8;z<=8;z++)if(Math.max(Math.abs(x),Math.abs(z))===8)vs(x,2,z,C.g);
+    for(let i=-7;i<=7;i+=3){vs(i,3,10,C.g);vs(i,3,-10,C.g);vs(10,3,i,C.g);vs(-10,3,i,C.g);}
+}
+
+/* ================================================================
+   POND
+   ================================================================ */
+function buildPond(px,pz,r){
+    for(let dx=-r-2;dx<=r+2;dx++)for(let dz=-r-2;dz<=r+2;dz++){
+        const d=Math.sqrt(dx*dx+dz*dz);
+        if(d<=r){const h=hsh(px+dx,pz+dz);vs(px+dx,0,pz+dz,h<0.3?C.wa:h<0.6?C.waL:C.waT);if(d<r-1)vs(px+dx,-1,pz+dz,C.waD);}
+        else if(d<=r+2)vs(px+dx,0,pz+dz,hsh(px+dx+50,pz+dz+50)<0.5?C.st:C.stL);
+    }
+    for(const[lx,lz]of[[-2,-1],[2,1],[-1,3],[3,-2],[-3,1]]){if(Math.sqrt(lx*lx+lz*lz)<r-1)vs(px+lx,0,pz+lz,C.grM);}
+    for(const[kx,kz,kc]of[[-1,1,C.koi],[1,-1,C.koi],[2,2,C.koiW],[-2,-2,C.koi]]){
+        if(Math.sqrt(kx*kx+kz*kz)<r-1){vs(px+kx,0,pz+kz,kc);vs(px+kx+1,0,pz+kz,kc);vs(px+kx,0,pz+kz+1,kc);}
+    }
+}
+
+/* ================================================================
+   TREES
+   ================================================================ */
+function buildCherry(cx,cz,by,th,cr){
+    for(let y=0;y<th;y++){vs(cx,by+y,cz,C.chT);if(y<2)vs(cx+1,by+y,cz,C.chT);}
+    const ty=by+th;
+    for(let i=1;i<=3;i++){
+        const o=Math.ceil(i*0.5);
+        vs(cx+i,ty-1+o,cz,C.chT);vs(cx-i,ty-1+o,cz,C.chT);
+        vs(cx,ty-1+o,cz+i,C.chT);vs(cx,ty-1+o,cz-i,C.chT);
+        const d=Math.ceil(i/2);
+        vs(cx+d,ty+Math.floor(i*0.4),cz+d,C.chT);vs(cx-d,ty+Math.floor(i*0.4),cz-d,C.chT);
+    }
+    const cc=[C.ch1,C.ch2,C.ch3,C.ch4,C.ch5,C.ch6],cy=ty+2;
+    for(let dx=-cr;dx<=cr;dx++)for(let dy=-Math.floor(cr*.7);dy<=Math.floor(cr*.7);dy++)for(let dz=-cr;dz<=cr;dz++){
+        const ds=Math.sqrt((dx/cr)**2+(dy/(cr*.7))**2+(dz/cr)**2);
+        if(ds>1.0)continue;
+        const h=hsh(cx+dx*7+dy*13,cz+dz*11+dy*3);
+        if(h<0.08)continue;
+        vs(cx+dx,cy+dy,cz+dz,cc[Math.floor(h*cc.length)]);
+    }
+}
+function buildGreenTree(cx,cz,by,th,cr){
+    for(let y=0;y<th;y++){vs(cx,by+y,cz,C.trk);if(y<3)vs(cx+1,by+y,cz,C.trk);}
+    const lc=[C.lv1,C.lv2,C.lv3,C.lv4,C.lv5],cy=by+th+1;
+    for(let dx=-cr;dx<=cr;dx++)for(let dy=-Math.floor(cr*.6);dy<=Math.floor(cr*.7);dy++)for(let dz=-cr;dz<=cr;dz++){
+        const ds=Math.sqrt(dx*dx+dy*dy+dz*dz);
+        if(ds>cr||(!dx&&!dz&&dy<0))continue;
+        const h=hsh(cx+dx*5+dy*7,cz+dz*3+dy*11);
+        if(h<0.1)continue;
+        vs(cx+dx,cy+dy,cz+dz,lc[Math.floor(h*lc.length)]);
+    }
+}
+function buildPine(cx,cz,by,hgt){
+    const th=Math.floor(hgt*.3);
+    for(let y=0;y<th;y++)vs(cx,by+y,cz,C.trk);
+    const pc=[C.pn1,C.pn2,C.pn3],sy=by+Math.floor(hgt*.2),ly=5;
+    for(let l=0;l<ly;l++){
+        const y=sy+l*Math.floor(hgt*.16),r=Math.max(1,Math.ceil((ly-l)*hgt*.07));
+        for(let dx=-r;dx<=r;dx++)for(let dz=-r;dz<=r;dz++)if(dx*dx+dz*dz<=r*r){
+            vs(cx+dx,y,cz+dz,pc[Math.floor(hsh(cx+dx+l*3,cz+dz+l*7)*pc.length)]);
+        }
+    }
+}
+function buildBamboo(cx,cz,cnt,hgt){
+    for(let i=0;i<cnt;i++){
+        const ox=Math.floor(hsh(i*17,0)*7)-3,oz=Math.floor(hsh(0,i*31)*7)-3;
+        const bx=cx+ox,bz=cz+oz,bh=hgt+Math.floor(hsh(i*7,i*13)*5);
+        for(let y=0;y<bh;y++)vs(bx,y+1,bz,y%5===0?C.bmD:C.bm);
+        const ly=bh+1;
+        if(hsh(i*47,0)<0.5){vs(bx+1,ly,bz,C.bmL);vs(bx-1,ly,bz,C.bm);}else{vs(bx,ly,bz+1,C.bmL);vs(bx,ly,bz-1,C.bm);}
+        vs(bx,ly+1,bz,C.bmL);
+        const my=Math.floor(bh*.7);if(hsh(i*13,i*29)<0.4)vs(bx+1,my,bz,C.bmL);
+    }
+}
+
+/* ================================================================
+   DECORATIONS
+   ================================================================ */
+function buildTorii(cx,cz){
+    for(let y=1;y<=9;y++){vs(cx-4,y,cz,y<=1?C.torD:C.tor);vs(cx+4,y,cz,y<=1?C.torD:C.tor);}
+    for(let x=-6;x<=6;x++){vs(cx+x,9,cz,C.tor);vs(cx+x,10,cz,C.torD);}
+    for(let x=-4;x<=4;x++)vs(cx+x,7,cz,C.tor);
+    vs(cx,8,cz,C.torD);
+    vf(cx-5,0,cz-1,cx-3,0,cz+1,C.st);vf(cx+3,0,cz-1,cx+5,0,cz+1,C.st);
+}
+function buildLantern(cx,cz,yb){
+    vs(cx,yb,cz,C.st);vs(cx,yb+1,cz,C.stL);vs(cx,yb+2,cz,C.stL);
+    fl(cx-1,cz-1,cx+1,cz+1,yb+3,C.stL);
+    vs(cx,yb+4,cz,C.lant);vs(cx+1,yb+4,cz,C.st);vs(cx-1,yb+4,cz,C.st);
+    vs(cx,yb+4,cz+1,C.st);vs(cx,yb+4,cz-1,C.st);
+    fl(cx-1,cz-1,cx+1,cz+1,yb+5,C.stD);vs(cx,yb+6,cz,C.st);vs(cx,yb+7,cz,C.stL);
+}
+function buildFlower(cx,cz,yb,col){
+    vs(cx,yb+1,cz,C.stem);
+    if(hsh(cx,cz)>0.5)vs(cx,yb+2,cz,C.stem);
+    const fy=yb+(hsh(cx,cz)>0.5?3:2);
+    vs(cx,fy,cz,col);
+    if(hsh(cx+1,cz)>.3)vs(cx+1,fy,cz,col);
+    if(hsh(cx-1,cz)>.3)vs(cx-1,fy,cz,col);
+    if(hsh(cx,cz+1)>.3)vs(cx,fy,cz+1,col);
+    if(hsh(cx,cz-1)>.3)vs(cx,fy,cz-1,col);
+    vs(cx,fy+1,cz,col);
+}
+function buildRocks(cx,cz,cnt){
+    const cs=[C.rk,C.rkL,C.rkD];
+    for(let i=0;i<cnt;i++){
+        const ox=Math.floor(hsh(i*17,0)*5)-2,oz=Math.floor(hsh(0,i*31)*5)-2;
+        const w=Math.floor(hsh(i*7,0)*2)+1,h=Math.floor(hsh(0,i*7)*3)+1;
+        for(let dx=-w;dx<=w;dx++)for(let dz=-w;dz<=w;dz++)if(dx*dx+dz*dz<=w*w)
+            for(let dy=0;dy<h;dy++)vs(cx+ox+dx,dy+1,cz+oz+dz,cs[Math.floor(hsh(cx+ox+dx,cz+oz+dz+dy)*3)]);
+    }
+}
+function buildBridge(x1,z1,x2,z2){
+    const dx=x2-x1,dz=z2-z1,len=Math.sqrt(dx*dx+dz*dz),steps=Math.ceil(len);
+    const ndx=dx/len,ndz=dz/len,pdx=-ndz,pdz=ndx;
+    for(let i=0;i<=steps;i++){
+        const t=i/steps,x=Math.round(x1+dx*t),z=Math.round(z1+dz*t);
+        const h=Math.round(Math.sin(t*Math.PI)*2)+2;
+        vs(x,h,z,C.w);vs(x+1,h,z,C.w);vs(x-1,h,z,C.w);
+        const rw1x=x+Math.round(pdx),rw1z=z+Math.round(pdz);
+        const rw2x=x-Math.round(pdx),rw2z=z-Math.round(pdz);
+        vs(rw1x,h+1,rw1z,C.wD);vs(rw2x,h+1,rw2z,C.wD);
+        if(i<3||i>steps-3){for(let p=0;p<h;p++)vs(x,p,z,C.wD);}
+    }
+}
+function buildFence(x1,z1,x2,z2){
+    const dx=x2-x1,dz=z2-z1,len=Math.sqrt(dx*dx+dz*dz),steps=Math.ceil(len);
+    for(let i=0;i<=steps;i++){
+        const t=i/steps,x=Math.round(x1+dx*t),z=Math.round(z1+dz*t);
+        if(i%3===0){vs(x,1,z,C.wD);vs(x,2,z,C.wD);vs(x,3,z,C.wD);}
+        vs(x,2,z,C.w);if(i%3!==0)vs(x,3,z,C.w);
+    }
+}
+function buildClouds(){
+    const cps=[[20,40,-25],[-30,45,15],[10,42,30],[-15,44,-35],[35,46,5],[-5,43,-15],[25,41,-10],[-25,47,-5]];
+    for(const[cx,cy,cz]of cps){
+        const cw=5+Math.floor(hsh(cx,cz)*6),cd=3+Math.floor(hsh(cz,cx)*4),ch=1+Math.floor(hsh(cx+cz,0)*2);
+        for(let dx=-cw;dx<=cw;dx++)for(let dz=-cd;dz<=cd;dz++)for(let dy=0;dy<ch;dy++){
+            const d=Math.sqrt((dx/cw)**2+(dz/cd)**2+(dy/ch)**2);
+            if(d<=1.1)vs(cx+dx,cy+dy,cz+dz,hsh(cx+dx,cz+dz+dy*7)<0.5?C.cl:C.clL);
+        }
+    }
+}
+
+/* ================================================================
+   SCENE ASSEMBLY
+   ================================================================ */
+function buildScene(){
+    buildGround();
+    buildPagoda();
+    buildPond(-20,5,6);
+
+    // Cherry blossom trees
+    buildCherry(-14,-16,0,7,5);
+    buildCherry(12,-14,0,6,4);
+    buildCherry(-23,-3,0,8,5);
+    buildCherry(18,14,0,7,5);
+    buildCherry(-10,22,0,6,4);
+
+    // Green trees
+    buildGreenTree(-26,-10,0,8,5);
+    buildGreenTree(24,-6,0,7,4);
+    buildGreenTree(-16,18,0,6,4);
+    buildGreenTree(22,22,0,7,5);
+    buildGreenTree(28,14,0,6,4);
+
+    // Pine
+    buildPine(-6,-25,0,14);
+    buildPine(15,-24,0,12);
+
+    // Bamboo
+    buildBamboo(26,-20,8,12);
+    buildBamboo(-26,20,6,10);
+
+    // Torii
+    buildTorii(0,27);
+
+    // Lanterns
+    for(const[lx,lz]of[[3,24],[-3,24],[3,18],[-3,18],[3,14],[-3,14]])buildLantern(lx,lz,0);
+
+    // Flowers
+    const fc=[C.flR,C.flP,C.flY,C.flPu,C.flO,C.flB,C.flW];
+    const fp=[[-4,20],[4,20],[-5,22],[5,22],[-6,26],[6,26],[-4,16],[4,16],
+        [-14,10],[-12,8],[14,10],[12,8],[-16,-5],[-14,-8],[16,-5],[14,-8],
+        [8,-20],[-8,-18],[10,-22],[-18,14],[20,10],[24,18],[15,17],[-20,18],
+        [-24,10],[-12,26],[12,26],[-8,24],[8,24],[-30,5],[30,5],[28,-15],
+        [-28,-15],[16,-20],[-16,-24],[6,28],[-6,28],[20,0],[-20,0],[10,12],[-10,12],
+        [-7,10],[7,10],[-10,-4],[10,-4],[-3,-19],[3,-19],[22,8],[-22,8],
+        [5,26],[-5,26],[9,6],[-9,6]];
+    for(const[fx,fz]of fp){
+        const ci=Math.floor(hsh(fx,fz)*fc.length);
+        buildFlower(fx,fz,0,fc[ci]);
+        if(hsh(fx+1,fz+1)>0.5){const ci2=Math.floor(hsh(fx+1,fz+1)*fc.length);buildFlower(fx+1,fz+1,0,fc[ci2]);}
+    }
+
+    // Rocks
+    buildRocks(-8,-22,4);buildRocks(10,-24,2);buildRocks(-22,15,3);
+    buildRocks(25,5,2);buildRocks(-15,-20,3);buildRocks(18,-16,2);
+
+    // Bridge
+    buildBridge(-26,3,-14,7);
+
+    // Fences
+    buildFence(-6,26,-6,22);buildFence(6,26,6,22);
+    buildFence(-6,22,-3,22);buildFence(6,22,3,22);
+
+    // Stepping stones
+    for(const[sx,sz]of[[5,8],[7,9],[9,10],[11,11],[-5,8],[-7,9],[-9,10],[-11,11],
+        [15,-3],[17,-4],[19,-5],[-15,-3],[-17,-4],[-19,-5]])
+        vs(sx,0,sz,hsh(sx,sz)<0.5?C.st:C.stL);
+
+    // Zen garden
+    for(let dx=-4;dx<=4;dx++)for(let dz=-4;dz<=4;dz++){
+        const d=Math.sqrt(dx*dx+dz*dz);
+        if(d<=4&&d>=0.5)vs(20+dx,0,-8+dz,hsh(20+dx,-8+dz)<0.5?C.stP:C.stPD);
+    }
+    vs(20,1,-8,C.rk);vs(20,2,-8,C.rkL);vs(21,1,-8,C.rkD);
+    vs(19,1,-8,C.rkD);vs(20,1,-9,C.rk);
+
+    // Moss
+    for(let i=0;i<8;i++){
+        const mx=Math.floor(hsh(i*41,0)*60)-30,mz=Math.floor(hsh(0,i*53)*60)-30;
+        if(Math.sqrt(mx*mx+mz*mz)>30)continue;
+        const mc=hsh(mx,mz)<0.5?C.moss:'#6b8e23';
+        vs(mx,0,mz,mc);if(hsh(mx+1,mz)>.5)vs(mx+1,0,mz,mc);
+    }
+
+    // Clouds
+    buildClouds();
+
+    // Additional moss on stones
+    vs(-9,1,-9,C.moss);vs(-8,1,-8,C.moss);vs(8,1,8,C.moss);
+    vs(-7,2,-7,C.moss);vs(9,1,-9,C.moss);
+
+    // Small red torii markers near cherry trees
+    function miniTorii(cx,cz){
+        vs(cx,1,cz,C.tor);vs(cx+2,1,cz,C.tor);
+        vs(cx,2,cz,C.tor);vs(cx+2,2,cz,C.tor);
+        vs(cx,3,cz,C.torD);vs(cx+1,3,cz,C.torD);vs(cx+2,3,cz,C.torD);
+        vs(cx-1,3,cz,C.torD);vs(cx+3,3,cz,C.torD);
+    }
+    miniTorii(-16,-18);miniTorii(14,-16);miniTorii(-24,-5);
+}
+
+/* ================================================================
+   RENDER VOXELS
+   ================================================================ */
+function renderVoxels(){
+    const groups={};
+    for(const[,v]of vox){if(!groups[v.c])groups[v.c]=[];groups[v.c].push(v);}
+    const geo=new THREE.BoxGeometry(1,1,1);
+    for(const[col,list]of Object.entries(groups)){
+        const mat=new THREE.MeshLambertMaterial({color:new THREE.Color(col)});
+        const mesh=new THREE.InstancedMesh(geo,mat,list.length);
+        mesh.castShadow=true;mesh.receiveShadow=true;
+        const m=new THREE.Matrix4();
+        for(let i=0;i<list.length;i++){m.setPosition(list[i].x,list[i].y,list[i].z);mesh.setMatrixAt(i,m);}
+        mesh.instanceMatrix.needsUpdate=true;
+        scene.add(mesh);
+    }
+    console.log('Voxels:',vox.size,'Colors:',Object.keys(groups).length);
+}
+
+/* ================================================================
+   FALLING CHERRY PETALS
+   ================================================================ */
+const petN=80;
+const petGeo=new THREE.BoxGeometry(0.35,0.12,0.35);
+const petCols=[0xffb7c5,0xff69b4,0xfff0f5,0xffc0cb,0xffe4e1];
+const petMeshes=[],petData=[];
+for(let m=0;m<5;m++){
+    const cnt=Math.floor(petN/5);
+    const mat=new THREE.MeshLambertMaterial({color:petCols[m],transparent:true,opacity:0.75});
+    const mesh=new THREE.InstancedMesh(petGeo,mat,cnt);
+    mesh.frustumCulled=false;scene.add(mesh);petMeshes.push(mesh);
+    for(let i=0;i<cnt;i++)petData.push({
+        x:(Math.random()-.5)*55,y:Math.random()*40+5,z:(Math.random()-.5)*55,
+        sp:.02+Math.random()*.04,sw:Math.random()*Math.PI*2,
+        ss:.01+Math.random()*.03,rs:.02+Math.random()*.05,mi:m,ii:i
+    });
+}
+function updatePetals(t){
+    const m=new THREE.Matrix4(),q=new THREE.Quaternion(),e=new THREE.Euler(),
+          p=new THREE.Vector3(),s=new THREE.Vector3(1,1,1);
+    for(const d of petData){
+        d.y-=d.sp;d.x+=Math.sin(t*d.ss+d.sw)*.035;d.z+=Math.cos(t*d.ss*.7+d.sw)*.025;
+        if(d.y<-2){d.y=40+Math.random()*5;d.x=(Math.random()-.5)*55;d.z=(Math.random()-.5)*55;}
+        p.set(d.x,d.y,d.z);
+        e.set(t*d.rs,t*d.rs*1.3,t*d.rs*.7);q.setFromEuler(e);
+        m.compose(p,q,s);petMeshes[d.mi].setMatrixAt(d.ii,m);
+    }
+    for(const mesh of petMeshes)mesh.instanceMatrix.needsUpdate=true;
+}
+
+/* ================================================================
+   INIT & ANIMATE
+   ================================================================ */
+buildScene();
+renderVoxels();
+updateCam();
+
+let elapsed=0;
+function animate(){
+    requestAnimationFrame(animate);
+    elapsed+=1/60;
+    updateCam();
+    updatePetals(elapsed);
+    renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>

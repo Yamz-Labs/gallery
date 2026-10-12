@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>10 Balls Bouncing Inside a Spinning Hexagon</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #04070f;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+
+    .hint {
+      position: fixed;
+      top: 10px;
+      left: 12px;
+      color: rgba(185, 225, 255, 0.7);
+      font: 13px system-ui, sans-serif;
+      pointer-events: none;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div class="hint">Drag: change spin speed · Double-click: reset balls</div>
+
+  <script>
+    const canvas = document.getElementById("scene");
+    const ctx = canvas.getContext("2d");
+
+    const TAU = Math.PI * 2;
+    const PI = Math.PI;
+    const PI_6 = PI / 6;
+
+    let W, H, cx, cy, hexRadius, sideAp;
+    let balls = [];
+    let hexAngle = 0;
+
+    const config = {
+      ballCount: 10,
+      omega: 0.65,                 // radians per second
+      gravity: 1100,               // set to 0 for zero-G bouncing
+      restitution: 0.82,           // wall bounce energy
+      ballBallRestitution: 0.9,    // ball-to-ball bounce energy
+      wallFriction: 0.985,         // tangential energy retained on wall hits
+      airDragPerSecond: 0.992,
+      maxSpeed: 1500,
+      trailLength: 18,
+      substeps: 8                  // physics stability
+    };
+
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+      cx = W / 2;
+      cy = H / 2;
+      hexRadius = Math.min(W, H) * 0.34;
+      sideAp = hexRadius * Math.cos(PI_6);
+
+      for (const b of balls) {
+        const cap = Math.max(1, Math.min(18, sideAp * 0.3));
+        b.r = Math.min(b.r, cap);
+
+        const limit = sideAp - b.r;
+        const maxOffset = Math.max(1, limit * 0.75);
+
+        const dx = b.x - cx;
+        const dy = b.y - cy;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > maxOffset) {
+          b.x = cx + dx / dist * maxOffset;
+          b.y = cy + dy / dist * maxOffset;
+        }
+      }
+    }
+
+    function chooseBallRadius() {
+      const max = Math.min(18, Math.max(4, sideAp * 0.28));
+      let r = max * (0.55 + Math.random() * 0.45);
+      r = Math.min(r, sideAp * 0.32);
+      r = Math.max(r, Math.min(1, sideAp * 0.18));
+      return Math.max(0.5, r);
+    }
+
+    function ballColors(hue) {
+      return {
+        hue,
+        base: `hsl(${hue}, 90%, 55%)`,
+        light: `hsl(${hue}, 100%, 82%)`,
+        dark: `hsl(${hue}, 85%, 28%)`
+      };
+    }
+
+    class Ball {
+      constructor() {
+        this.r = chooseBallRadius();
+
+        const limit = Math.max(1, sideAp - this.r);
+        const maxOffset = limit * 0.55;
+
+        const theta = Math.random() * TAU;
+        const radius = Math.sqrt(Math.random()) * maxOffset;
+
+        this.x = cx + Math.cos(theta) * radius;
+        this.y = cy + Math.sin(theta) * radius;
+
+        this.vx = (Math.random() - 0.5) * 420;
+        this.vy = (Math.random() - 0.5) * 420;
+
+        Object.assign(this, ballColors(Math.floor(Math.random() * 360)));
+
+        this.trail = [];
+      }
+
+      get mass() {
+        return this.r * this.r;
+      }
+    }
+
+    function initBalls() {
+      balls = [];
+      for (let i = 0; i < config.ballCount; i++) {
+        balls.push(new Ball());
+      }
+    }
+
+    function capSpeed(b) {
+      const speed = Math.hypot(b.vx, b.vy);
+      if (speed > config.maxSpeed) {
+        const k = config.maxSpeed / speed;
+        b.vx *= k;
+        b.vy *= k;
+      }
+    }
+
+    function collideWalls() {
+      for (const b of balls) {
+        // Multiple passes help resolve corner cases.
+        for (let pass = 0; pass < 3; pass++) {
+          let corrected = false;
+
+          for (let i = 0; i < 6; i++) {
+            const sideAngle = hexAngle + PI_6 + i * PI / 3;
+
+            // Outward normal of this hexagon side.
+            const ux = Math.cos(sideAngle);
+            const uy = Math.sin(sideAngle);
+
+            // Ball center must stay behind this offset side.
+            const limit = sideAp - b.r;
+
+            const dx = b.x - cx;
+            const dy = b.y - cy;
+            const d = dx * ux + dy * uy;
+
+            if (d > limit) {
+              corrected = true;
+
+              const penetration = d - limit;
+              b.x -= ux * penetration;
+              b.y -= uy * penetration;
+
+              // Approximate contact point on the rotating wall.
+              const rx = b.x + ux * b.r - cx;
+              const ry = b.y + uy * b.r - cy;
+
+              // Velocity of the wall point due to angular velocity.
+              // For screen-space y-down coordinates:
+              const wallVx = -config.omega * ry;
+              const wallVy = config.omega * rx;
+
+              // Relative velocity of ball with respect to moving wall.
+              let rvx = b.vx - wallVx;
+              let rvy = b.vy - wallVy;
+
+              const normalSpeed = rvx * ux + rvy * uy;
+
+              // Reflect only if moving into the wall.
+              if (normalSpeed > 0) {
+                const tx = -uy;
+                const ty = ux;
+
+                const tangentSpeed = rvx * tx + rvy * ty;
+
+                const newNormal = -config.restitution * normalSpeed;
+                const newTangent = tangentSpeed * config.wallFriction;
+
+                b.vx = ux * newNormal + tx * newTangent + wallVx;
+                b.vy = uy * newNormal + ty * newTangent + wallVy;
+              }
+            }
+          }
+
+          if (!corrected) break;
+        }
+      }
+    }
+
+    function collideBalls() {
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+          const a = balls[i];
+          const b = balls[j];
+
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDist = a.r + b.r;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq < minDist * minDist) {
+            const dist = Math.sqrt(distSq) || 0.0001;
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = minDist - dist;
+
+            const m1 = a.mass;
+            const m2 = b.mass;
+            const totalMass = m1 + m2;
+
+            // Positional correction.
+            a.x -= nx * overlap * (m2 / totalMass);
+            a.y -= ny * overlap * (m2 / totalMass);
+            b.x += nx * overlap * (m1 / totalMass);
+            b.y += ny * overlap * (m1 / totalMass);
+
+            // Impulse-based collision response.
+            const rvx = b.vx - a.vx;
+            const rvy = b.vy - a.vy;
+            const relNormal = rvx * nx + rvy * ny;
+
+            if (relNormal < 0) {
+              const e = config.ballBallRestitution;
+              const impulse =
+                -(1 + e) * relNormal /
+                (1 / m1 + 1 / m2);
+
+              const ix = impulse * nx;
+              const iy = impulse * ny;
+
+              a.vx -= ix / m1;
+              a.vy -= iy / m1;
+              b.vx += ix / m2;
+              b.vy += iy / m2;
+            }
+          }
+        }
+      }
+    }
+
+    function update(dt) {
+      if (dt <= 0) return;
+
+      const h = dt / config.substeps;
+      const drag = Math.pow(config.airDragPerSecond, h);
+
+      for (let step = 0; step < config.substeps; step++) {
+        hexAngle = (hexAngle + config.omega * h) % TAU;
+
+        for (const b of balls) {
+          b.vy += config.gravity * h;
+          b.x += b.vx * h;
+          b.y += b.vy * h;
+
+          b.vx *= drag;
+          b.vy *= drag;
+        }
+
+        // Solve collisions. Order helps reduce jitter near walls.
+        collideWalls();
+        collideBalls();
+        collideWalls();
+
+        for (const b of balls) {
+          capSpeed(b);
+        }
+      }
+
+      for (const b of balls) {
+        b.trail.push({ x: b.x, y: b.y });
+        while (b.trail.length > config.trailLength) {
+          b.trail.shift();
+        }
+      }
+    }
+
+    function drawHexagon() {
+      ctx.save();
+
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const theta = hexAngle + i * PI / 3;
+        const x = cx + hexRadius * Math.cos(theta);
+        const y = cy + hexRadius * Math.sin(theta);
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+
+      ctx.fillStyle = "rgba(35, 85, 145, 0.14)";
+      ctx.fill();
+
+      ctx.shadowBlur = 30;
+      ctx.shadowColor = "rgba(70, 190, 255, 0.8)";
+      ctx.strokeStyle = "rgba(110, 220, 255, 0.65)";
+      ctx.lineWidth = 9;
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(230, 250, 255, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawBalls() {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      // Trails.
+      for (const b of balls) {
+        for (let k = 0; k < b.trail.length - 1; k++) {
+          const p0 = b.trail[k];
+          const p1 = b.trail[k + 1];
+          const t = (k + 1) / b.trail.length;
+
+          ctx.strokeStyle = `hsla(${b.hue}, 100%, 65%, ${t * 0.3})`;
+          ctx.lineWidth = b.r * t * 0.75;
+
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.stroke();
+        }
+      }
+
+      // Balls.
+      for (const b of balls) {
+        const g = ctx.createRadialGradient(
+          b.x - b.r * 0.35,
+          b.y - b.r * 0.35,
+          b.r * 0.1,
+          b.x,
+          b.y,
+          b.r
+        );
+
+        g.addColorStop(0, b.light);
+        g.addColorStop(0.6, b.base);
+        g.addColorStop(1, b.dark);
+
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, TAU);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255,255,255,0.15)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      const bg = ctx.createRadialGradient(
+        cx,
+        cy,
+        0,
+        cx,
+        cy,
+        Math.max(W, H) * 0.65
+      );
+
+      bg.addColorStop(0, "rgba(22, 44, 75, 0.55)");
+      bg.addColorStop(1, "rgba(4, 8, 16, 1)");
+
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      drawHexagon();
+      drawBalls();
+    }
+
+    // Interactive spin control.
+    let dragging = false;
+    let pointerStartX = 0;
+    let omegaAtDragStart = 0;
+
+    window.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      pointerStartX = e.clientX;
+      omegaAtDragStart = config.omega;
+      canvas.style.cursor = "grabbing";
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+
+      const dx = e.clientX - pointerStartX;
+      config.omega = Math.max(-4, Math.min(4, omegaAtDragStart + dx * 0.006));
+    });
+
+    function endDrag() {
+      dragging = false;
+      canvas.style.cursor = "grab";
+    }
+
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+
+    window.addEventListener("dblclick", () => {
+      initBalls();
+    });
+
+    window.addEventListener("resize", resize);
+
+    resize();
+    initBalls();
+
+    let last = performance.now();
+
+    function frame(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

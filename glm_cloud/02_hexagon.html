@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#121014">
+<title>Hex Vessel — kinetic chamber</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#121014;
+    --bone:#E9E3D4;
+    --dim:rgba(233,227,212,.44);
+    --faint:rgba(233,227,212,.16);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden}
+  body{
+    background:var(--bg);color:var(--bone);
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    -webkit-user-select:none;user-select:none;
+  }
+  #stage{position:fixed;inset:0;display:block;cursor:crosshair;touch-action:none}
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:2}
+
+  #title{position:absolute;top:28px;left:32px;max-width:300px}
+  #title .over{font-size:10px;letter-spacing:.26em;color:var(--dim)}
+  #title h1{
+    font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-weight:400;
+    font-size:clamp(30px,3.2vw,45px);line-height:1.05;margin-top:10px;letter-spacing:.01em;
+  }
+  #title .rule{width:46px;height:1px;background:var(--faint);margin:16px 0 12px}
+  #title .sub{font-size:10.5px;line-height:1.75;letter-spacing:.04em;color:var(--dim)}
+
+  #ctl{position:absolute;top:28px;right:32px;display:flex;gap:8px;pointer-events:auto}
+  #ctl button{
+    appearance:none;background:transparent;border:1px solid var(--faint);color:var(--bone);
+    font:500 10px/1 "IBM Plex Mono",monospace;letter-spacing:.18em;text-transform:uppercase;
+    padding:10px 14px;cursor:pointer;transition:border-color .18s;
+  }
+  #ctl button:hover{border-color:rgba(233,227,212,.55)}
+  #ctl button .dot{
+    display:inline-block;width:6px;height:6px;border:1px solid var(--bone);
+    margin-right:8px;transition:background .18s;
+  }
+  #ctl button.on .dot{background:var(--bone)}
+
+  #data{position:absolute;left:32px;bottom:30px;width:218px}
+  #data .row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0 7px;border-top:1px solid var(--faint)}
+  #data .k{font-size:9px;letter-spacing:.22em;color:var(--dim)}
+  #data .v{font-size:11.5px;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+  #spark{display:block;width:100%;height:44px;border-top:1px solid var(--faint)}
+  #data .cap{font-size:8.5px;letter-spacing:.2em;color:var(--dim);text-align:right;margin-top:5px}
+
+  #hints{position:absolute;right:32px;bottom:30px;text-align:right;font-size:9.5px;letter-spacing:.16em;color:var(--dim);line-height:2.1}
+
+  @media (max-width:760px){
+    #title{top:18px;left:18px}
+    #title h1{font-size:26px;margin-top:6px}
+    #title .rule,#title .sub{display:none}
+    #ctl{top:18px;right:18px}
+    #ctl button{padding:8px 9px;font-size:9px;letter-spacing:.12em}
+    #data{left:18px;bottom:18px;width:168px}
+    #data .v{font-size:10.5px}
+    #hints{display:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div id="hud">
+  <div id="title">
+    <div class="over">KINETIC CHAMBER · N = 10 · GRAVITY ON</div>
+    <h1>Hex Vessel</h1>
+    <div class="rule"></div>
+    <div class="sub">Ten elastic bodies sealed in a rotating hexagonal drum.
+    Grab the frame and flick it — every wall carries its momentum into whatever it touches.</div>
+  </div>
+
+  <div id="ctl">
+    <button id="b-pause">Pause</button>
+    <button id="b-auto" class="on" aria-pressed="true"><span class="dot"></span>Auto</button>
+    <button id="b-reset">Reset</button>
+  </div>
+
+  <div id="data">
+    <div class="row"><span class="k">SPIN ω</span><span class="v" id="v-omega">+0.55 rad/s</span></div>
+    <div class="row"><span class="k">ENERGY</span><span class="v" id="v-ke">0</span></div>
+    <div class="row"><span class="k">CONTACTS</span><span class="v" id="v-contacts">W 0 · B 0</span></div>
+    <div class="row"><span class="k">CLOCK</span><span class="v" id="v-clock">0.0 s</span></div>
+    <canvas id="spark"></canvas>
+    <div class="cap">ΣKE · 13 S WINDOW</div>
+  </div>
+
+  <div id="hints">
+    DRAG DRUM — SPIN&nbsp;&nbsp;·&nbsp;&nbsp;GRAB BALL — THROW<br>
+    TAP — PULSE&nbsp;&nbsp;·&nbsp;&nbsp;SPACE — PAUSE&nbsp;&nbsp;·&nbsp;&nbsp;R — RESET
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const TAU = Math.PI * 2;
+const clamp = (v,a,b)=> v<a?a:v>b?b:v;
+
+const BG = "#121014";
+const BONE = "233,227,212";
+
+/* Ten mineral tones on charcoal — warm, distinct, easy to track */
+const PALETTE = [
+  "#EFB54B","#E06E4A","#C14E41","#E9E3D4","#9DBBA8",
+  "#6FA3A8","#B0ABA0","#C98A5B","#B7B45E","#D9918A"
+];
+/* Ball radii as a fraction of the chamber radius */
+const FRACS = [0.050,0.044,0.047,0.040,0.037,0.035,0.033,0.031,0.029,0.027];
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+const spark = document.getElementById("spark");
+const sctx = spark.getContext("2d");
+const $ = id => document.getElementById(id);
+const vOmega=$("v-omega"), vKe=$("v-ke"), vContacts=$("v-contacts"), vClock=$("v-clock");
+const bPause=$("b-pause"), bAuto=$("b-auto"), bReset=$("b-reset");
+
+/* ------- simulation constants ------- */
+const DT = 1/300;               // fixed physics step (5 substeps per 60fps frame)
+const WALL_E = 0.84;            // wall restitution
+const WALL_KEEP = 0.93;         // tangential velocity kept on wall contact (spin drag)
+const PAIR_E = 0.88;            // ball-ball restitution
+const AIR = 0.05;               // linear drag per second
+const AUTOW = 0.55;             // auto-spin target, rad/s
+const MAXW = 10;                // max angular velocity from flicks
+
+const state = {
+  theta:0, omega:AUTOW, autoDir:1, auto:true, paused:false,
+  t:0, wallHits:0, pairHits:0, freeUntil:0,
+  balls:[], sparks:[], rings:[], flash:[0,0,0,0,0,0]
+};
+const drag = { mode:null, id:-1, ball:null, tx:0, ty:0, x0:0, y0:0, px:0, py:0,
+  t0:0, moved:0, lastAng:0, lastT:0, emaW:0 };
+let hoverBall = null;
+const PICK = matchMedia("(pointer:coarse)").matches ? 24 : 14;
+
+let W=0,H=0,DPR=1,R=0,Cx=0,Cy=0,g=0,MAXS=0;
+let sparkW=0, sparkH=0;
+const sparkData=[]; let lastSample=0;
+
+/* ------- helpers ------- */
+function hexToRgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function rgba(rgb,a){ return "rgba("+rgb[0]+","+rgb[1]+","+rgb[2]+","+a+")"; }
+
+function hexVerts(){
+  const vs = new Array(6);
+  for(let i=0;i<6;i++){
+    const a = state.theta + i*TAU/6 - Math.PI/2;   // pointy-top
+    vs[i] = { x:Cx+R*Math.cos(a), y:Cy+R*Math.sin(a) };
+  }
+  return vs;
+}
+
+/* ------- layout ------- */
+function resize(){
+  W=innerWidth; H=innerHeight;
+  DPR=Math.min(window.devicePixelRatio||1,2);
+  canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  const pR=R, pCx=Cx, pCy=Cy;
+  R = Math.max(90, Math.min(W*0.42, H*0.34));
+  Cx = W>860 ? W*0.52 : W*0.5;
+  Cy = H*0.515;
+  g = 3.4*R;          // gravity, scaled to the chamber
+  MAXS = 10*R;        // speed clamp (keeps substeps tunnel-proof)
+  if(pR>0){
+    const s=R/pR;
+    for(const b of state.balls){
+      b.x=Cx+(b.x-pCx)*s; b.y=Cy+(b.y-pCy)*s;
+      b.vx*=s; b.vy*=s;
+      b.r=b.frac*R; b.m=b.frac*b.frac;
+      b.trail.length=0;
+    }
+    const vs=hexVerts();
+    for(const b of state.balls) projectInside(b,vs);
+  }
+  const rct=spark.getBoundingClientRect();
+  sparkW=rct.width; sparkH=rct.height;
+  spark.width=Math.max(1,Math.round(sparkW*DPR));
+  spark.height=Math.max(1,Math.round(sparkH*DPR));
+  sctx.setTransform(DPR,0,0,DPR,0,0);
+}
+
+/* Push a ball back inside the hexagon (used after resize) */
+function projectInside(b,verts){
+  for(let i=0;i<6;i++){
+    const a=verts[i], c=verts[(i+1)%6];
+    const abx=c.x-a.x, aby=c.y-a.y, l2=abx*abx+aby*aby;
+    const t=clamp(((b.x-a.x)*abx+(b.y-a.y)*aby)/l2,0,1);
+    const px=a.x+abx*t, py=a.y+aby*t;
+    const dx=b.x-px, dy=b.y-py, d2=dx*dx+dy*dy;
+    if(d2<b.r*b.r){
+      const d=Math.sqrt(d2)||1e-6;
+      b.x=px+dx/d*b.r; b.y=py+dy/d*b.r;
+    }
+  }
+}
+
+/* ------- spawn ------- */
+function reset(){
+  state.balls.length=0; state.sparks.length=0; state.rings.length=0;
+  state.flash.fill(0); state.wallHits=0; state.pairHits=0; state.t=0;
+  sparkData.length=0;
+  const GA=Math.PI*(3-Math.sqrt(5));
+  for(let i=0;i<10;i++){
+    const frac=FRACS[i];
+    const a=i*GA+Math.random()*0.5;
+    const d=R*(0.08+0.26*Math.sqrt((i+0.6)/10))+Math.random()*R*0.02;
+    const rgb=hexToRgb(PALETTE[i]);
+    state.balls.push({
+      id:i+1, frac, r:frac*R, m:frac*frac,
+      x:Cx+Math.cos(a)*d, y:Cy+Math.sin(a)*d,
+      vx:(Math.random()*2-1)*0.6*R, vy:(Math.random()*2-1)*0.6*R-0.25*R,
+      col:PALETTE[i], rgb, rgbDark:rgb.map(c=>Math.round(c*0.48)),
+      trail:[], drag:false, cool:0
+    });
+  }
+}
+
+/* ------- physics ------- */
+function step(dt){
+  state.t += dt;
+  const hexDrag = drag.mode==="hex";
+
+  // spin drive: gentle motor when AUTO is on, coasting otherwise
+  if(state.auto && !hexDrag && state.t>state.freeUntil){
+    state.omega += (state.autoDir*AUTOW - state.omega)*(1-Math.exp(-1.1*dt));
+  } else if(!hexDrag){
+    state.omega *= Math.exp(-0.03*dt);
+  }
+  if(!hexDrag) state.theta += state.omega*dt;  // while dragging, the pointer owns theta
+
+  const verts = hexVerts();
+
+  // integrate
+  for(const b of state.balls){
+    if(b.drag){
+      const ox=b.x, oy=b.y;
+      const k=1-Math.exp(-26*dt);          // stiff follow → natural fling on release
+      b.x += (drag.tx-b.x)*k; b.y += (drag.ty-b.y)*k;
+      b.vx = clamp((b.x-ox)/dt,-MAXS,MAXS);
+      b.vy = clamp((b.y-oy)/dt,-MAXS,MAXS);
+    } else {
+      b.vy += g*dt;
+      const dr=Math.exp(-AIR*dt);
+      b.vx*=dr; b.vy*=dr;
+      const sp=Math.hypot(b.vx,b.vy);
+      if(sp>MAXS){ const f=MAXS/sp; b.vx*=f; b.vy*=f; }
+      b.x += b.vx*dt; b.y += b.vy*dt;
+    }
+  }
+
+  // ball-ball impulses (positional relaxation twice, velocity once)
+  const n=state.balls.length;
+  for(let it=0; it<2; it++){
+    for(let i=0;i<n;i++){
+      const a=state.balls[i];
+      const ai=a.drag?0:1/a.m;
+      for(let j=i+1;j<n;j++){
+        const c=state.balls[j];
+        const cj=c.drag?0:1/c.m;
+        const tot=ai+cj; if(tot===0) continue;
+        const dx=c.x-a.x, dy=c.y-a.y, rr=a.r+c.r;
+        const d2=dx*dx+dy*dy;
+        if(d2>=rr*rr) continue;
+        const d=Math.sqrt(d2);
+        const nx=d>1e-6?dx/d:1, ny=d>1e-6?dy/d:0;
+        const corr=(rr-d)/tot*0.9;
+        a.x-=nx*corr*ai; a.y-=ny*corr*ai;
+        c.x+=nx*corr*cj; c.y+=ny*corr*cj;
+        if(it===0){
+          const vn=(c.vx-a.vx)*nx+(c.vy-a.vy)*ny;
+          if(vn<0){
+            const jimp=-(1+PAIR_E)*vn/tot;
+            a.vx-=jimp*ai*nx; a.vy-=jimp*ai*ny;
+            c.vx+=jimp*cj*nx; c.vy+=jimp*cj*ny;
+            if(-vn>0.1*R) state.pairHits++;
+          }
+        }
+      }
+    }
+  }
+
+  for(const b of state.balls) collideWalls(b,verts);
+
+  // effects
+  for(let i=state.sparks.length-1;i>=0;i--){
+    const s=state.sparks[i];
+    s.life-=dt;
+    if(s.life<=0){ state.sparks.splice(i,1); continue; }
+    s.vy+=g*0.6*dt; s.x+=s.vx*dt; s.y+=s.vy*dt;
+  }
+  for(let i=state.rings.length-1;i>=0;i--){
+    const r0=state.rings[i]; r0.t+=dt*2.2;
+    if(r0.t>=1) state.rings.splice(i,1);
+  }
+  for(let i=0;i<6;i++) state.flash[i]*=Math.exp(-6*dt);
+}
+
+/* Wall contact in the drum's rotating frame: reflect the relative velocity,
+   so the moving wall both bounces and drags the ball. Corners fall out of
+   the closest-point-on-segment test for free. */
+function collideWalls(b,verts){
+  for(let i=0;i<6;i++){
+    const a=verts[i], c=verts[(i+1)%6];
+    const abx=c.x-a.x, aby=c.y-a.y, l2=abx*abx+aby*aby;
+    const t=clamp(((b.x-a.x)*abx+(b.y-a.y)*aby)/l2,0,1);
+    const px=a.x+abx*t, py=a.y+aby*t;
+    const dx=b.x-px, dy=b.y-py;
+    const d2=dx*dx+dy*dy;
+    if(d2>=b.r*b.r) continue;
+    const d=Math.sqrt(d2);
+    let nx,ny;
+    if(d<1e-6){ nx=px-Cx; ny=py-Cy; const l=Math.hypot(nx,ny)||1; nx/=l; ny/=l; }
+    else { nx=dx/d; ny=dy/d; }
+    b.x=px+nx*b.r; b.y=py+ny*b.r;      // positional correction
+    if(b.drag) continue;               // dragged ball: clamped, not reflected
+
+    const wvx=-state.omega*(py-Cy), wvy=state.omega*(px-Cx);  // v = ω × r
+    const rvx=b.vx-wvx, rvy=b.vy-wvy;
+    const vn=rvx*nx+rvy*ny;
+    if(vn<0){
+      const vtx=rvx-vn*nx, vty=rvy-vn*ny;
+      const nvn=-WALL_E*vn;
+      b.vx=wvx+nx*nvn+vtx*WALL_KEEP;
+      b.vy=wvy+ny*nvn+vty*WALL_KEEP;
+      registerImpact(i,px,py,-vn,b);
+    }
+  }
+}
+
+function registerImpact(edge,px,py,vn,b){
+  state.flash[edge]=Math.min(1,state.flash[edge]+vn/(2.5*R));
+  if(vn>0.35*R && state.t-b.cool>0.09){
+    b.cool=state.t;
+    state.wallHits++;
+    if(vn>1.8*R){
+      const cnt=Math.min(6,2+Math.floor(vn/(1.5*R)));
+      for(let k=0;k<cnt;k++){
+        const a2=Math.random()*TAU;
+        const sp=vn*(0.3+Math.random()*0.4);
+        state.sparks.push({
+          x:px, y:py,
+          vx:b.vx*0.2+Math.cos(a2)*sp,
+          vy:b.vy*0.2+Math.sin(a2)*sp,
+          life:0.22+Math.random()*0.2, rgb:b.rgb
+        });
+      }
+      if(state.sparks.length>90) state.sparks.splice(0,state.sparks.length-90);
+    }
+  }
+}
+
+/* Radial shove from a tap */
+function pulse(x,y){
+  const S=2.2*R;
+  for(const b of state.balls){
+    let dx=b.x-x, dy=b.y-y, d=Math.hypot(dx,dy);
+    if(d<2){ dx=0; dy=-1; d=1; }
+    const f=S*Math.exp(-d/(0.5*R));
+    b.vx+=dx/d*f; b.vy+=dy/d*f;
+  }
+  state.rings.push({x,y,t:0});
+}
+
+/* ------- rendering ------- */
+function pathPoly(vs){
+  ctx.beginPath();
+  ctx.moveTo(vs[0].x,vs[0].y);
+  for(let i=1;i<6;i++) ctx.lineTo(vs[i].x,vs[i].y);
+  ctx.closePath();
+}
+
+function render(time){
+  ctx.fillStyle=BG; ctx.fillRect(0,0,W,H);
+  const vs=hexVerts();
+
+  // interior polar grid, clipped to the chamber, spokes rotating with it
+  ctx.save();
+  pathPoly(vs); ctx.clip();
+  ctx.lineWidth=1;
+  ctx.strokeStyle="rgba("+BONE+",0.05)";
+  for(const f of [0.25,0.5,0.75]){
+    ctx.beginPath(); ctx.arc(Cx,Cy,R*f,0,TAU); ctx.stroke();
+  }
+  ctx.strokeStyle="rgba("+BONE+",0.045)";
+  ctx.beginPath();
+  for(let i=0;i<12;i++){
+    const a=state.theta+i*TAU/12;
+    ctx.moveTo(Cx,Cy);
+    ctx.lineTo(Cx+Math.cos(a)*R, Cy+Math.sin(a)*R);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // protractor ring: fixed outer circle + tick scale rotating with the drum
+  ctx.lineWidth=1;
+  ctx.strokeStyle="rgba("+BONE+",0.07)";
+  ctx.beginPath(); ctx.arc(Cx,Cy,R*1.135,0,TAU); ctx.stroke();
+  ctx.beginPath();
+  for(let i=0;i<72;i++){
+    if(i%6===0) continue;
+    const a=state.theta+i*TAU/72, c=Math.cos(a), s=Math.sin(a);
+    ctx.moveTo(Cx+c*R*1.05, Cy+s*R*1.05);
+    ctx.lineTo(Cx+c*R*1.072, Cy+s*R*1.072);
+  }
+  ctx.strokeStyle="rgba("+BONE+",0.14)"; ctx.stroke();
+  ctx.beginPath();
+  for(let i=0;i<72;i+=6){
+    const a=state.theta+i*TAU/72, c=Math.cos(a), s=Math.sin(a);
+    ctx.moveTo(Cx+c*R*1.05, Cy+s*R*1.05);
+    ctx.lineTo(Cx+c*R*1.095, Cy+s*R*1.095);
+  }
+  ctx.strokeStyle="rgba("+BONE+",0.32)"; ctx.stroke();
+
+  // fixed index marker + live angle readout
+  ctx.beginPath();
+  ctx.moveTo(Cx, Cy-(R*1.10+4));
+  ctx.lineTo(Cx-4, Cy-R*1.15);
+  ctx.lineTo(Cx+4, Cy-R*1.15);
+  ctx.closePath();
+  ctx.fillStyle="rgba("+BONE+",0.75)"; ctx.fill();
+  const deg=(((state.theta*180/Math.PI)%360)+360)%360;
+  ctx.font='10px "IBM Plex Mono",ui-monospace,monospace';
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.fillStyle="rgba("+BONE+",0.5)";
+  ctx.fillText(deg.toFixed(1).padStart(5,"0")+"°", Cx+11, Cy-R*1.125);
+
+  // hexagon frame with impact flashes
+  ctx.lineJoin="round"; ctx.lineCap="round";
+  pathPoly(vs);
+  ctx.strokeStyle="rgba("+BONE+",0.88)"; ctx.lineWidth=2; ctx.stroke();
+  for(let i=0;i<6;i++){
+    const f=state.flash[i];
+    if(f<0.02) continue;
+    const a=vs[i], b2=vs[(i+1)%6];
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b2.x,b2.y);
+    ctx.strokeStyle="rgba(255,241,205,"+(f*0.9).toFixed(3)+")";
+    ctx.lineWidth=3.5; ctx.stroke();
+  }
+  // inset hairline + vertex nodes
+  ctx.beginPath();
+  for(let i=0;i<6;i++){
+    const p=vs[i], x=Cx+(p.x-Cx)*0.955, y=Cy+(p.y-Cy)*0.955;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle="rgba("+BONE+",0.12)"; ctx.lineWidth=1; ctx.stroke();
+  for(const p of vs){
+    ctx.beginPath(); ctx.arc(p.x,p.y,3,0,TAU);
+    ctx.fillStyle="rgba("+BONE+",0.9)"; ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x,p.y,7,0,TAU);
+    ctx.strokeStyle="rgba("+BONE+",0.2)"; ctx.lineWidth=1; ctx.stroke();
+  }
+
+  // center mark
+  ctx.strokeStyle="rgba("+BONE+",0.4)"; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(Cx-6,Cy); ctx.lineTo(Cx+6,Cy);
+  ctx.moveTo(Cx,Cy-6); ctx.lineTo(Cx,Cy+6);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(Cx,Cy,1.6,0,TAU);
+  ctx.fillStyle="rgba("+BONE+",0.55)"; ctx.fill();
+
+  if(state.paused){
+    ctx.font='11px "IBM Plex Mono",ui-monospace,monospace';
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillStyle="rgba("+BONE+","+(0.34+0.12*Math.sin(time*2.6)).toFixed(3)+")";
+    ctx.fillText("P A U S E D", Cx, Cy-R*0.72);
+  }
+
+  // motion trails (only visible when a body is actually fast)
+  for(const b of state.balls){
+    const tr=b.trail, L=tr.length;
+    if(L<3) continue;
+    const sf=clamp(Math.hypot(b.vx,b.vy)/(2.4*R),0,1);
+    if(sf<0.06) continue;
+    for(let i=1;i<L;i++){
+      const f0=i/L;
+      ctx.beginPath();
+      ctx.moveTo(tr[i-1].x,tr[i-1].y); ctx.lineTo(tr[i].x,tr[i].y);
+      ctx.strokeStyle=rgba(b.rgb,(f0*f0*sf*0.38).toFixed(3));
+      ctx.lineWidth=0.5+1.6*f0*sf;
+      ctx.stroke();
+    }
+  }
+
+  // bodies
+  for(const b of state.balls){
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,TAU);
+    ctx.fillStyle=b.col; ctx.fill();
+    ctx.lineWidth=1.25; ctx.strokeStyle=rgba(b.rgbDark,0.9); ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(b.x-b.r*0.34, b.y-b.r*0.36, Math.max(1.1,b.r*0.16),0,TAU);
+    ctx.fillStyle="rgba(255,252,240,0.45)"; ctx.fill();
+    if(b.r>10.5){
+      ctx.fillStyle="rgba(18,16,20,0.55)";
+      ctx.font='500 '+(b.r*0.62).toFixed(1)+'px "IBM Plex Mono",ui-monospace,monospace';
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(String(b.id).padStart(2,"0"), b.x, b.y+0.5);
+    }
+    if(b.drag){
+      ctx.beginPath(); ctx.arc(b.x,b.y,b.r+5,0,TAU);
+      ctx.strokeStyle="rgba("+BONE+",0.85)"; ctx.lineWidth=1; ctx.stroke();
+    } else if(b===hoverBall && !drag.mode){
+      ctx.beginPath(); ctx.arc(b.x,b.y,b.r+3.5,0,TAU);
+      ctx.strokeStyle="rgba("+BONE+",0.4)"; ctx.lineWidth=1; ctx.stroke();
+    }
+  }
+
+  // impact sparks
+  for(const s of state.sparks){
+    const al=clamp(s.life/0.42,0,1);
+    ctx.beginPath();
+    ctx.moveTo(s.x-s.vx*0.02, s.y-s.vy*0.02);
+    ctx.lineTo(s.x,s.y);
+    ctx.strokeStyle=rgba(s.rgb,(al*0.9).toFixed(3));
+    ctx.lineWidth=1.4; ctx.stroke();
+  }
+
+  // pulse rings
+  for(const r0 of state.rings){
+    const e=1-Math.pow(1-r0.t,3);
+    ctx.beginPath(); ctx.arc(r0.x,r0.y,6+e*R*0.5,0,TAU);
+    ctx.strokeStyle="rgba("+BONE+","+(0.35*(1-r0.t)).toFixed(3)+")";
+    ctx.lineWidth=1.25; ctx.stroke();
+    ctx.beginPath(); ctx.arc(r0.x,r0.y,2+e*R*0.22,0,TAU);
+    ctx.strokeStyle="rgba("+BONE+","+(0.18*(1-r0.t)).toFixed(3)+")";
+    ctx.lineWidth=1; ctx.stroke();
+  }
+}
+
+/* ------- HUD ------- */
+function fmtKE(k){
+  if(k>=1e6) return (k/1e6).toFixed(2)+" M";
+  if(k>=1e3) return (k/1e3).toFixed(1)+" k";
+  return k.toFixed(0);
+}
+function updateHUD(now){
+  let ke=0;
+  for(const b of state.balls) ke+=0.5*b.m*(b.vx*b.vx+b.vy*b.vy);
+  vKe.textContent=fmtKE(ke);
+  const w=state.omega;
+  vOmega.textContent=(w<0?"−":"+")+Math.abs(w).toFixed(2)+" rad/s";
+  vContacts.textContent="W "+state.wallHits+" · B "+state.pairHits;
+  vClock.textContent=state.t.toFixed(1)+" s";
+  if(now-lastSample>90){
+    lastSample=now;
+    sparkData.push(ke);
+    if(sparkData.length>150) sparkData.shift();
+  }
+  drawSpark();
+}
+function drawSpark(){
+  sctx.clearRect(0,0,sparkW,sparkH);
+  sctx.strokeStyle="rgba("+BONE+",0.15)"; sctx.lineWidth=1;
+  sctx.beginPath(); sctx.moveTo(0,sparkH-1); sctx.lineTo(sparkW,sparkH-1); sctx.stroke();
+  const L=sparkData.length;
+  if(L<2) return;
+  let max=1;
+  for(let i=0;i<L;i++) if(sparkData[i]>max) max=sparkData[i];
+  sctx.beginPath();
+  let lx=0, ly=0;
+  for(let i=0;i<L;i++){
+    lx=sparkW-2-(L-1-i)*(sparkW/149);
+    ly=sparkH-2-(sparkData[i]/max)*(sparkH-7);
+    i===0?sctx.moveTo(lx,ly):sctx.lineTo(lx,ly);
+  }
+  sctx.strokeStyle="rgba("+BONE+",0.65)"; sctx.stroke();
+  sctx.beginPath(); sctx.arc(lx,ly,1.7,0,TAU);
+  sctx.fillStyle="rgba("+BONE+",0.9)"; sctx.fill();
+}
+
+/* ------- controls ------- */
+function setPauseUI(){ bPause.textContent=state.paused?"Resume":"Pause"; }
+function setAutoUI(){ bAuto.classList.toggle("on",state.auto); bAuto.setAttribute("aria-pressed",String(state.auto)); }
+function togglePause(){ state.paused=!state.paused; setPauseUI(); }
+function toggleAuto(){
+  state.auto=!state.auto;
+  if(state.auto) state.autoDir=state.omega>=0?1:-1;
+  setAutoUI();
+}
+bPause.addEventListener("click",e=>{ togglePause(); e.currentTarget.blur(); });
+bAuto.addEventListener("click",e=>{ toggleAuto(); e.currentTarget.blur(); });
+bReset.addEventListener("click",e=>{ reset(); e.currentTarget.blur(); });
+
+addEventListener("keydown",e=>{
+  if(e.code==="Space"){ e.preventDefault(); togglePause(); }
+  else if(e.code==="KeyR"){ reset(); }
+  else if(e.code==="KeyA"){ toggleAuto(); }
+});
+
+/* ------- pointer: spin the drum, throw bodies, tap to pulse ------- */
+function hoverUpdate(x,y){
+  let best=null, bd=1e9;
+  for(const b of state.balls){
+    const d=Math.hypot(b.x-x,b.y-y);
+    if(d<b.r+12 && d<bd){ bd=d; best=b; }
+  }
+  hoverBall=best;
+  canvas.style.cursor=best?"grab":"crosshair";
+}
+
+canvas.addEventListener("pointerdown",e=>{
+  if(drag.mode) return;
+  e.preventDefault();
+  try{ canvas.setPointerCapture(e.pointerId); }catch(_){}
+  const x=e.clientX, y=e.clientY;
+  let best=null, bd=1e9;
+  for(const b of state.balls){
+    const d=Math.hypot(b.x-x,b.y-y);
+    if(d<b.r+PICK && d<bd){ bd=d; best=b; }
+  }
+  drag.id=e.pointerId; drag.x0=x; drag.y0=y; drag.px=x; drag.py=y;
+  drag.t0=performance.now(); drag.moved=0; drag.tx=x; drag.ty=y;
+  if(best){ drag.mode="ball"; drag.ball=best; best.drag=true; }
+  else{
+    drag.mode="hex";
+    drag.lastAng=Math.atan2(y-Cy,x-Cx);
+    drag.lastT=performance.now();
+    drag.emaW=state.omega;
+  }
+  hoverBall=null;
+  canvas.style.cursor="grabbing";
+});
+
+canvas.addEventListener("pointermove",e=>{
+  if(drag.mode && e.pointerId!==drag.id) return;
+  if(!drag.mode){ hoverUpdate(e.clientX,e.clientY); return; }
+  const x=e.clientX, y=e.clientY;
+  drag.moved+=Math.hypot(x-drag.px,y-drag.py);
+  drag.px=x; drag.py=y;
+  if(drag.mode==="ball"){ drag.tx=x; drag.ty=y; }
+  else{
+    const now=performance.now();
+    const ang=Math.atan2(y-Cy,x-Cx);
+    let dA=ang-drag.lastAng;
+    while(dA>Math.PI) dA-=TAU;
+    while(dA<-Math.PI) dA+=TAU;
+    state.theta+=dA;                                  // pointer owns the rotation
+    const dtm=Math.max(4,now-drag.lastT)/1000;
+    drag.emaW+=(clamp(dA/dtm,-MAXW,MAXW)-drag.emaW)*0.35;  // smoothed → flick velocity
+    state.omega=drag.emaW;
+    drag.lastAng=ang; drag.lastT=now;
+  }
+});
+
+function endDrag(e){
+  if(!drag.mode || e.pointerId!==drag.id) return;
+  const dur=performance.now()-drag.t0;
+  const tap=dur<260 && drag.moved<7;
+  if(drag.mode==="ball"){
+    drag.ball.drag=false;
+    drag.ball=null;
+    if(tap) pulse(drag.x0,drag.y0);
+  } else {
+    state.omega=clamp(drag.emaW,-MAXW,MAXW);          // release keeps the flick
+    if(Math.abs(state.omega)>0.06) state.autoDir=state.omega>0?1:-1;
+    state.freeUntil=state.t+1.4;                      // let it coast before the motor re-engages
+    if(tap) pulse(drag.x0,drag.y0);
+  }
+  drag.mode=null; drag.id=-1; drag.ball=null;
+  canvas.style.cursor="crosshair";
+}
+canvas.addEventListener("pointerup",endDrag);
+canvas.addEventListener("pointercancel",endDrag);
+
+/* ------- main loop ------- */
+let last=performance.now(), acc=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt=(now-last)/1000; last=now;
+  if(dt>0.05) dt=0.05;
+  if(!state.paused){
+    acc+=dt;
+    let guard=0;
+    while(acc>=DT && guard<40){ step(DT); acc-=DT; guard++; }
+    for(const b of state.balls){
+      b.trail.push({x:b.x,y:b.y});
+      if(b.trail.length>16) b.trail.shift();
+    }
+  }
+  render(now/1000);
+  updateHUD(now);
+}
+
+addEventListener("resize",resize);
+resize();
+reset();
+setPauseUI(); setAutoUI();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

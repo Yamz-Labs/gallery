@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9fd4f5"/>
+      <stop offset="1" stop-color="#e3f4ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="800" height="500" fill="url(#sky)"/>
+  <g>
+    <circle cx="90" cy="70" r="28" fill="#ffd94d"/>
+    <g stroke="#ffd94d" stroke-width="4" stroke-linecap="round">
+      <line x1="90" y1="32" x2="90" y2="18"/>
+      <line x1="118" y1="42" x2="129" y2="31"/>
+      <line x1="128" y1="70" x2="142" y2="70"/>
+      <line x1="118" y1="98" x2="129" y2="109"/>
+      <line x1="90" y1="108" x2="90" y2="122"/>
+      <line x1="62" y1="98" x2="51" y2="109"/>
+      <line x1="52" y1="70" x2="38" y2="70"/>
+      <line x1="62" y1="42" x2="51" y2="31"/>
+      <animateTransform attributeName="transform" type="rotate" from="0 90 70" to="360 90 70" dur="12s" repeatCount="indefinite"/>
+    </g>
+  </g>
+  <ellipse cx="120" cy="430" rx="200" ry="60" fill="#8fc9a0"/>
+  <ellipse cx="700" cy="440" rx="240" ry="80" fill="#79b98c"/>
+
+  <!-- clouds -->
+  <g fill="#ffffff" opacity="0.9">
+    <g>
+      <ellipse cx="0" cy="70" rx="38" ry="18"/>
+      <ellipse cx="30" cy="60" rx="30" ry="16"/>
+      <ellipse cx="-30" cy="60" rx="26" ry="14"/>
+      <animateTransform attributeName="transform" type="translate" from="-80 0" to="880 0" dur="16s" repeatCount="indefinite"/>
+    </g>
+    <g>
+      <ellipse cx="0" cy="130" rx="46" ry="20"/>
+      <ellipse cx="38" cy="120" rx="32" ry="16"/>
+      <ellipse cx="-38" cy="120" rx="28" ry="14"/>
+      <animateTransform attributeName="transform" type="translate" from="-120 0" to="920 0" dur="22s" begin="-8s" repeatCount="indefinite"/>
+    </g>
+  </g>
+
+  <!-- road -->
+  <rect x="0" y="440" width="800" height="60" fill="#4c4c55"/>
+  <line x1="0" y1="470" x2="800" y2="470" stroke="#ffffff" stroke-width="5" stroke-dasharray="40 34">
+    <animate attributeName="stroke-dashoffset" from="0" to="-74" dur="0.6s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- speed lines -->
+  <g stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.7">
+    <line x1="120" y1="300" x2="190" y2="300"><animate attributeName="opacity" values="0.7;0.1;0.7" dur="0.9s" repeatCount="indefinite"/></line>
+    <line x1="100" y1="330" x2="160" y2="330"><animate attributeName="opacity" values="0.1;0.7;0.1" dur="0.9s" repeatCount="indefinite"/></line>
+    <line x1="130" y1="360" x2="175" y2="360"><animate attributeName="opacity" values="0.7;0.1;0.7" dur="0.9s" begin="0.3s" repeatCount="indefinite"/></line>
+  </g>
+
+  <!-- bicycle -->
+  <g stroke="#2b6cb0" stroke-width="6" stroke-linecap="round" fill="none">
+    <line x1="290" y1="368" x2="400" y2="368"/>
+    <line x1="400" y1="368" x2="375" y2="300"/>
+    <line x1="375" y1="300" x2="515" y2="300"/>
+    <line x1="515" y1="300" x2="400" y2="368"/>
+    <line x1="290" y1="368" x2="375" y2="300"/>
+    <line x1="515" y1="300" x2="510" y2="368"/>
+    <line x1="515" y1="300" x2="528" y2="266"/>
+    <path d="M528,266 L498,254"/>
+  </g>
+  <circle cx="498" cy="254" r="6" fill="#333"/>
+  <polygon points="352,278 388,278 382,268 358,268" fill="#333"/>
+
+  <!-- rear wheel -->
+  <g>
+    <circle cx="290" cy="368" r="68" fill="none" stroke="#222" stroke-width="8"/>
+    <g stroke="#888" stroke-width="3">
+      <line x1="290" y1="368" x2="354" y2="368"/>
+      <line x1="290" y1="368" x2="335.3" y2="413.3"/>
+      <line x1="290" y1="368" x2="290" y2="432"/>
+      <line x1="290" y1="368" x2="244.7" y2="413.3"/>
+      <line x1="290" y1="368" x2="226" y2="368"/>
+      <line x1="290" y1="368" x2="244.7" y2="322.7"/>
+      <line x1="290" y1="368" x2="290" y2="304"/>
+      <line x1="290" y1="368" x2="335.3" y2="322.7"/>
+      <animateTransform attributeName="transform" type="rotate" from="0 290 368" to="360 290 368" dur="1s" repeatCount="indefinite"/>
+    </g>
+    <circle cx="290" cy="368" r="7" fill="#222"/>
+  </g>
+
+  <!-- front wheel -->
+  <g>
+    <circle cx="510" cy="368" r="68" fill="none" stroke="#222" stroke-width="8"/>
+    <g stroke="#888" stroke-width="3">
+      <line x1="510" y1="368" x2="574" y2="368"/>
+      <line x1="510" y1="368" x2="555.3" y2="413.3"/>
+      <line x1="510" y1="368" x2="510" y2="432"/>
+      <line x1="510" y1="368" x2="464.7" y2="413.3"/>
+      <line x1="510" y1="368" x2="442" y2="368"/>
+      <line x1="510" y1="368" x2="464.7" y2="322.7"/>
+      <line x1="510" y1="368" x2="510" y2="304"/>
+      <line x1="510" y1="368" x2="555.3" y2="322.7"/>
+      <animateTransform attributeName="transform" type="rotate" from="0 510 368" to="360 510 368" dur="1s" repeatCount="indefinite"/>
+    </g>
+    <circle cx="510" cy="368" r="7" fill="#222"/>
+  </g>
+
+  <!-- chain -->
+  <circle cx="400" cy="368" r="26" fill="none" stroke="#555" stroke-width="4"/>
+  <circle cx="290" cy="368" r="12" fill="none" stroke="#555" stroke-width="4"/>
+  <line x1="400" y1="342" x2="290" y2="356" stroke="#333" stroke-width="3"/>
+  <line x1="400" y1="394" x2="290" y2="380" stroke="#333" stroke-width="3"/>
+
+  <!-- crank + pedals -->
+  <g stroke="#333" stroke-width="5" stroke-linecap="round">
+    <line x1="400" y1="368" x2="422" y2="368"/>
+    <line x1="400" y1="368" x2="378" y2="368"/>
+    <animateTransform attributeName="transform" type="rotate" from="0 400 368" to="360 400 368" dur="1s" repeatCount="indefinite"/>
+  </g>
+
+  <!-- pelican -->
+  <g>
+    <polygon points="315,262 288,248 298,274" fill="#e8e8e8"/>
+    <ellipse cx="360" cy="250" rx="52" ry="38" fill="#fdfdfd" stroke="#c9c9c9" stroke-width="2"/>
+    <ellipse cx="345" cy="252" rx="30" ry="17" fill="#e8e8e8"/>
+    <path d="M368,245 Q450,235 505,258" stroke="#e8e8e8" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <path d="M392,232 Q420,215 448,212" stroke="#fdfdfd" stroke-width="13" fill="none" stroke-linecap="round"/>
+    <circle cx="458" cy="196" r="19" fill="#fdfdfd" stroke="#c9c9c9" stroke-width="2"/>
+    <path d="M444,180 q-12,-10 -6,-20" stroke="#c9c9c9" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <polygon points="474,188 548,216 474,206" fill="#f6821f"/>
+    <path d="M474,206 Q516,252 548,216 L474,206 Z" fill="#e07123"/>
+    <circle cx="462" cy="190" r="4.5" fill="#222"/>
+    <circle cx="464" cy="188" r="1.5" fill="#fff"/>
+    <animateTransform attributeName="transform" type="translate" values="0 0;0 2.5;0 0" dur="0.7s" repeatCount="indefinite"/>
+  </g>
+
+  <!-- legs pedaling -->
+  <polyline points="372,282 409,331 422,368" fill="none" stroke="#f28c28" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <animate attributeName="points" dur="1s" repeatCount="indefinite" values="
+      372,282 409,331 422,368;
+      372,282 405.8,338.8 415.6,383.6;
+      372,282 398,343 400,390;
+      372,282 390.2,338.8 384.4,383.6;
+      372,282 387,331 378,368;
+      372,282 390.2,323.2 384.4,352.4;
+      372,282 398,320 400,346;
+      372,282 405.8,323.2 415.6,352.4;
+      372,282 409,331 422,368"/>
+  </polyline>
+  <polyline points="372,282 387,331 378,368" fill="none" stroke="#f28c28" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <animate attributeName="points" dur="1s" repeatCount="indefinite" values="
+      372,282 387,331 378,368;
+      372,282 390.2,323.2 384.4,352.4;
+      372,282 398,320 400,346;
+      372,282 405.8,323.2 415.6,352.4;
+      372,282 409,331 422,368;
+      372,282 405.8,338.8 415.6,383.6;
+      372,282 398,343 400,390;
+      372,282 390.2,338.8 384.4,383.6;
+      372,282 387,331 378,368"/>
+  </polyline>
+  <ellipse cx="422" cy="368" rx="9" ry="5" fill="#e07123">
+    <animate attributeName="cx" dur="1s" repeatCount="indefinite" values="422;415.6;400;384.4;378;384.4;400;415.6;422"/>
+    <animate attributeName="cy" dur="1s" repeatCount="indefinite" values="368;383.6;390;383.6;368;352.4;346;352.4;368"/>
+  </ellipse>
+  <ellipse cx="378" cy="368" rx="9" ry="5" fill="#e07123">
+    <animate attributeName="cx" dur="1s" repeatCount="indefinite" values="378;384.4;400;415.6;422;415.6;400;384.4;378"/>
+    <animate attributeName="cy" dur="1s" repeatCount="indefinite" values="368;352.4;346;352.4;368;383.6;390;383.6;368"/>
+  </ellipse>
+</svg>
