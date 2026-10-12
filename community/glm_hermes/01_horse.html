@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Low-Poly Galloping Horse — Seamless Loop</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{background:linear-gradient(180deg,#0e2f52 0%,#2e6ea8 36%,#8fc3e0 68%,#eaf3f8 100%);font-family:'Trebuchet MS',Verdana,sans-serif}
+  canvas{display:block}
+  #hud{position:fixed;left:20px;top:18px;color:#fff;text-shadow:0 1px 4px rgba(10,25,45,.45);pointer-events:none;user-select:none}
+  #hud h1{margin:0;font-size:21px;letter-spacing:3px;font-weight:700}
+  #hud p{margin:5px 0 0;font-size:12px;opacity:.85;letter-spacing:.5px}
+  #loopTag{position:fixed;right:20px;top:18px;color:#fff;font-size:12px;letter-spacing:1px;opacity:.9;pointer-events:none;display:flex;align-items:center;gap:8px}
+  #dot{width:9px;height:9px;border-radius:50%;background:#7fd0ff;box-shadow:0 0 10px #7fd0ff;transition:transform .12s ease-out}
+  #dot.tick{transform:scale(1.7)}
+  #vig{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(8,18,34,.38) 100%)}
+</style>
+</head>
+<body>
+<div id="hud"><h1>GALLOP</h1><p>procedural low-poly horse &middot; three.js &middot; seamless 10 s loop</p></div>
+<div id="loopTag"><span id="dot"></span><span>LOOP&nbsp;10.0s</span></div>
+<div id="vig"></div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ============================ timing ============================
+   Stride cycle: 2.5 s. Loop: 10 s = exactly 4 strides, so every
+   gait-driven motion (legs, body, head, tail, dust bursts) repeats
+   perfectly. Scenery scrolls at SPEED; SPEED*LOOP = P meters, and the
+   scenery pattern is tiled with period P, so the whole world is also
+   exactly periodic. The camera does one full orbit per loop.       */
+const GAIT  = 2.5;               // seconds per stride cycle
+const LOOP  = 10;                // seconds per seamless loop (4 strides)
+const SPEED = 0.73;              // ground scroll speed (m/s) = stride / GAIT
+const P     = SPEED * LOOP;      // scenery pattern period (7.3 m)
+const GS    = Math.PI * 2 / GAIT;// gait angular speed (rad/s)
+
+/* ======================== renderer / scene ===================== */
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.body.insertAdjacentHTML('beforeend',
+    '<p style="color:#fff;padding:24px">WebGL is not available in this browser.</p>');
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xddeaf3, 16, 60);
+
+/* gradient sky drawn as a screen-space background texture */
+{
+  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
+  const g = cv.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0.00, '#0e2f52');
+  gr.addColorStop(0.36, '#2e6ea8');
+  gr.addColorStop(0.68, '#8fc3e0');
+  gr.addColorStop(1.00, '#eaf3f8');
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  scene.background = tex;
+}
+
+/* ============================ lights =========================== */
+scene.add(new THREE.HemisphereLight(0xbfd9ff, 0x7a8a5a, 0.85));
+const sunLight = new THREE.DirectionalLight(0xfff0d8, 1.7);
+sunLight.position.set(6, 9, 4);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+const sc = sunLight.shadow.camera;
+sc.left = -9; sc.right = 9; sc.top = 9; sc.bottom = -9; sc.near = 1; sc.far = 30;
+sc.updateProjectionMatrix();
+sunLight.shadow.bias = -0.0004;
+scene.add(sunLight);
+
+const mat = (c, o = {}) => new THREE.MeshStandardMaterial(
+  Object.assign({ color: c, flatShading: true, roughness: 0.95, metalness: 0 }, o));
+
+/* ============================ ground =========================== */
+const gCv = document.createElement('canvas'); gCv.width = 512; gCv.height = 512;
+{
+  const g = gCv.getContext('2d');
+  g.fillStyle = '#74a352'; g.fillRect(0, 0, 512, 512);
+  const grassCols = ['#6a9646', '#57893f', '#7fb25c', '#82ad63'];
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = grassCols[(Math.random() * 4) | 0];
+    g.beginPath();
+    g.arc(Math.random() * 512, Math.random() * 512, 2 + Math.random() * 7, 0, 6.283);
+    g.fill();
+  }
+  // dirt track running along the scroll direction (world x)
+  const bh = 150, y0 = (512 - bh) / 2;
+  g.fillStyle = '#b59a6b'; g.fillRect(0, y0, 512, bh);
+  g.fillStyle = '#a08557';
+  for (let i = 0; i < 260; i++) {
+    g.beginPath();
+    g.arc(Math.random() * 512, y0 + 6 + Math.random() * (bh - 12), 1.5 + Math.random() * 4, 0, 6.283);
+    g.fill();
+  }
+  g.fillStyle = '#8f7a55';
+  g.fillRect(0, y0, 512, 3); g.fillRect(0, y0 + bh - 3, 512, 3);
+}
+const gTex = new THREE.CanvasTexture(gCv);
+gTex.wrapS = gTex.wrapT = THREE.RepeatWrapping;
+gTex.repeat.set(16, 16);
+gTex.colorSpace = THREE.SRGBColorSpace;
+gTex.anisotropy = 4;
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(120, 120),
+  new THREE.MeshStandardMaterial({ map: gTex, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* =================== scrolling scenery pattern =================
+   One tile of the pattern has width P; the whole group is tiled
+   BANDS times, so when its x-offset wraps by P the look is
+   identical -> perfectly seamless scrolling.                      */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(7);
+const pat = new THREE.Group(); scene.add(pat);
+const BANDS = 10;
+
+const grassGeo  = new THREE.ConeGeometry(0.16, 0.55, 5);
+const grassMatA = mat(0x4e7c3a), grassMatB = mat(0x5f9146);
+function addTuft(x, z, s) {
+  const m = new THREE.Mesh(grassGeo, rng() < 0.5 ? grassMatA : grassMatB);
+  m.position.set(x, 0.27 * s, z); m.scale.setScalar(s); pat.add(m);
+}
+function addTree(x, z, s) {
+  const tr = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.3, 5), mat(0x6b4a33));
+  trunk.position.y = 0.65; trunk.castShadow = true; tr.add(trunk);
+  const f1 = new THREE.Mesh(new THREE.ConeGeometry(0.75, 1.7, 6), mat(0x3f6d35));
+  f1.position.y = 2.0; f1.castShadow = true; tr.add(f1);
+  const f2 = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.2, 6), mat(0x4e7c3a));
+  f2.position.y = 2.7; f2.castShadow = true; tr.add(f2);
+  tr.position.set(x, 0, z); tr.scale.setScalar(s); pat.add(tr);
+}
+function addRock(x, z, s) {
+  const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.4 * s), mat(0x8d8d84));
+  r.position.set(x, 0.28 * s, z);
+  r.rotation.set(rng() * 3, rng() * 3, rng() * 3);
+  pat.add(r);
+}
+for (let b = 0; b < BANDS; b++) {
+  const bx = b * P - (BANDS * P) / 2;
+  for (let k = 0; k < 9; k++) {
+    const side = rng() < 0.5 ? -1 : 1;
+    addTuft(bx + rng() * P, side * (4 + rng() * 11), 0.7 + rng() * 0.8);
+  }
+  for (let k = 0; k < 3; k++) {
+    const side = rng() < 0.5 ? -1 : 1;
+    addTree(bx + rng() * P, side * (7 + rng() * 7), 0.8 + rng() * 0.6);
+  }
+  for (let k = 0; k < 2; k++) {
+    const side = rng() < 0.5 ? -1 : 1;
+    addRock(bx + rng() * P, side * (4 + rng() * 8), 0.6 + rng() * 0.9);
+  }
+}
+
+/* =================== static far background ===================== */
+const hillGeoA = new THREE.ConeGeometry(1, 1, 7);
+const hillMatA = mat(0x5d7d58), hillMatB = mat(0x6a8f66);
+const hills = [
+  [-28, -45, 7, 5], [-10, -50, 9, 6], [6, -48, 8, 5], [24, -44, 10, 6],
+  [-25, 45, 8, 5], [-6, 50, 10, 6], [12, 46, 7, 5], [28, 44, 9, 6],
+  [-45, 8, 8, 5], [45, -8, 9, 6], [-48, -20, 7, 4], [48, 20, 8, 5]
+];
+for (const [x, z, r, h] of hills) {
+  const m = new THREE.Mesh(hillGeoA, rng() < 0.5 ? hillMatA : hillMatB);
+  m.scale.set(r, h, 1); m.position.set(x, h / 2 - 0.5, z); scene.add(m);
+}
+const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 });
+const clouds = [[-18, 8, -24, 5, 1.1], [16, 9, 20, 6, 1.3], [24, 10, -14, 4, 1],
+                [-26, 7, 12, 5, 1.2], [2, 11, -36, 7, 1.4]];
+for (const [x, y, z, w, h] of clouds) {
+  const c = new THREE.Mesh(new THREE.BoxGeometry(w, h, 2.2), cloudMat);
+  c.position.set(x, y, z); scene.add(c);
+}
+const sunDisc = new THREE.Mesh(
+  new THREE.CircleGeometry(2.6, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffedb8, fog: false }));
+sunDisc.position.set(26, 16, -40);
+scene.add(sunDisc);
+
+/* ========================= the horse =========================== */
+const horse = new THREE.Group(); scene.add(horse);
+const body = new THREE.Group(); body.position.y = 1.5; horse.add(body);
+
+const box = (w, h, d, c, x, y, z, rz = 0, rx = 0, parent = body) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c));
+  m.position.set(x, y, z); m.rotation.z = rz; m.rotation.x = rx;
+  m.castShadow = true; parent.add(m); return m;
+};
+
+/* torso: chest high, mid-back dips, rump high, belly under */
+box(2.7, 1.0, 1.15, 0x8a5a33, 0, 0, 0);                 // barrel
+box(1.15, 1.25, 1.2, 0x8a5a33, 0.8, 0.08, 0, -0.10);    // chest
+box(1.15, 1.15, 1.2, 0x8a5a33, -0.9, 0.10, 0, 0.16);    // rump
+box(0.75, 0.3, 0.95, 0x8a5a33, 0.45, 0.55, 0, -0.12);   // withers ridge
+box(2.4, 0.35, 1.05, 0x9c6a3d, 0, -0.42, 0);            // belly
+
+/* neck: tapered 5-sided cylinder, tilted up-forward */
+const neck = new THREE.Group();
+neck.position.set(1.15, 0.35, 0); neck.rotation.z = -0.55; body.add(neck);
+const neckMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.32, 1.3, 5), mat(0x8a5a33));
+neckMesh.position.set(0, 0.55, 0); neckMesh.castShadow = true; neck.add(neckMesh);
+
+/* head (kept roughly horizontal on top of the tilted neck) */
+const head = new THREE.Group();
+head.position.set(0, 1.15, 0); head.rotation.z = 0.55; neck.add(head);
+box(0.52, 0.46, 0.62, 0x8a5a33, 0.02, 0.06, 0, 0, 0, head);            // skull
+box(0.34, 0.26, 0.42, 0x6e462a, 0.36, -0.12, 0, -0.35, 0, head);       // muzzle
+box(0.07, 0.07, 0.06, 0x241a12, 0.5, -0.02, 0.12, 0, 0, head);         // nostril R
+box(0.07, 0.07, 0.06, 0x241a12, 0.5, -0.02, -0.12, 0, 0, head);        // nostril L
+box(0.06, 0.36, 0.12, 0xe8e2d2, 0.45, 0.02, 0.17, -0.35, 0, head);     // white blaze
+box(0.3, 0.14, 0.4, 0x6e462a, 0.16, -0.2, 0, -0.25, 0, head);          // jaw
+box(0.13, 0.28, 0.12, 0x2e1d12, 0.03, 0.36, 0, -0.55, 0, head);        // forelock
+
+const eyeGeo = new THREE.SphereGeometry(0.085, 8, 6);
+const eyeMat = mat(0x17110c);
+for (const s of [1, -1]) {
+  const e = new THREE.Mesh(eyeGeo, eyeMat);
+  e.position.set(0.16, 0.18, 0.27 * s); head.add(e);
+  const gl = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.02),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  gl.position.set(0.2, 0.22, 0.335 * s); head.add(gl);
+}
+const earGeo = new THREE.ConeGeometry(0.09, 0.28, 4);
+const ears = [];
+for (const s of [1, -1]) {
+  const e = new THREE.Mesh(earGeo, mat(0x6e462a));
+  e.position.set(-0.02, 0.4, 0.13 * s);
+  e.rotation.x = 0.25 * s; e.rotation.z = -0.15;
+  head.add(e); ears.push(e);
+}
+
+/* mane: strips leaning back along the neck, animated */
+const mane = [];
+for (let i = 0; i < 6; i++) {
+  mane.push(box(0.13, 0.3, 0.12, 0x2e1d12, 0.02, 0.2 + i * 0.16, 0, 0.5 + i * 0.05, 0, neck));
+}
+
+/* tail: 4 cascading segments, streaming back and waving */
+const tail = new THREE.Group();
+tail.position.set(-1.3, 0.32, 0); tail.rotation.z = -1.55; body.add(tail);
+const tailSegs = [];
+let tp = tail;
+const tw = [0.26, 0.2, 0.15, 0.1];
+for (let i = 0; i < 4; i++) {
+  const L = 0.5;
+  const seg = new THREE.Mesh(new THREE.BoxGeometry(tw[i], L, tw[i] * 0.8), mat(0x2e1d12));
+  seg.position.set(0, -L / 2, 0); seg.castShadow = true; tp.add(seg);
+  const g = new THREE.Group(); g.position.set(0, -L, 0); tp.add(g);
+  tailSegs.push(g); tp = g;
+}
+
+/* legs: shoulder/hip pivot -> knee pivot -> cannon + hoof */
+const legs = [];
+function makeLeg(front, side, off) {
+  const g = new THREE.Group();
+  g.position.set(front ? 0.95 : -1.0, front ? -0.17 : -0.04, side * (front ? 0.34 : 0.44));
+  body.add(g);
+  const upper = new THREE.Mesh(
+    new THREE.BoxGeometry(front ? 0.36 : 0.5, front ? 0.7 : 0.8, front ? 0.32 : 0.5), mat(0x8a5a33));
+  upper.position.set(0, front ? -0.35 : -0.4, 0); upper.castShadow = true; g.add(upper);
+  if (!front) { // haunch taper on hind legs
+    const th = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.62), mat(0x7c4f2c));
+    th.position.set(-0.12, -0.15, 0); th.rotation.z = 0.25; th.castShadow = true; g.add(th);
+  }
+  const knee = new THREE.Group(); knee.position.set(0, front ? -0.7 : -0.8, 0); g.add(knee);
+  const lower = new THREE.Mesh(
+    new THREE.BoxGeometry(front ? 0.26 : 0.3, 0.55, front ? 0.26 : 0.32), mat(0xcfc7b8));
+  lower.position.set(0, -0.275, 0); lower.castShadow = true; knee.add(lower);
+  const hoof = new THREE.Mesh(
+    new THREE.BoxGeometry(front ? 0.34 : 0.38, 0.16, front ? 0.36 : 0.4), mat(0x2a211c));
+  hoof.position.set(0, -0.61, 0); hoof.castShadow = true; knee.add(hoof);
+  g.userData = { off, front, side, knee, hoof, prev: -9, s: 0 };
+  legs.push(g);
+}
+makeLeg(true, 1, 0.62);    // left fore
+makeLeg(true, -1, 0.50);   // right fore
+makeLeg(false, 1, 0.00);   // left hind
+makeLeg(false, -1, 0.12);  // right hind
+
+/* ======================= dust particles ======================== */
+const dustGeo = new THREE.TetrahedronGeometry(0.1);
+const dust = [];
+let dustIdx = 0;
+for (let i = 0; i < 70; i++) {
+  const m = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial(
+    { color: 0xcbb389, transparent: true, opacity: 0, depthWrite: false }));
+  m.visible = false; scene.add(m);
+  dust.push({ m, life: 0, vel: new THREE.Vector3() });
+}
+function spawnDust(hoof, n) {
+  const p = new THREE.Vector3(); hoof.getWorldPosition(p);
+  for (let k = 0; k < n; k++) {
+    const d = dust[dustIdx++ % dust.length];
+    d.life = 0.9 + Math.random() * 0.4;
+    d.m.visible = true;
+    d.m.position.set(p.x + (Math.random() - 0.5) * 0.25, Math.max(0.06, p.y),
+                     p.z + (Math.random() - 0.5) * 0.25);
+    d.vel.set(-0.7 - Math.random() * 0.9, 0.5 + Math.random() * 1.1, (Math.random() - 0.5) * 1.1);
+    d.m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    d.m.scale.setScalar(0.5 + Math.random() * 0.6);
+  }
+}
+function updateDust(dt) {
+  for (const d of dust) {
+    if (d.life <= 0) continue;
+    d.life -= dt;
+    if (d.life <= 0) { d.m.visible = false; continue; }
+    d.vel.y -= 2.4 * dt;
+    d.m.position.addScaledVector(d.vel, dt);
+    if (d.m.position.y < 0.06) { d.m.position.y = 0.06; d.vel.y *= -0.3; d.vel.x *= 0.75; }
+    d.m.scale.multiplyScalar(1 + dt * 1.1);
+    d.m.material.opacity = Math.min(0.85, d.life * 0.9);
+    d.m.rotation.x += dt * 2.5; d.m.rotation.y += dt * 1.8;
+  }
+}
+
+/* ====================== gait animation ========================= */
+function updateGait(t) {
+  const a = GS * t;              // gait phase
+  const f = (t / GAIT) % 1;      // cycle fraction
+  for (const l of legs) {
+    const u = l.userData;
+    const la = a + u.off * Math.PI * 2;
+    const s = Math.sin(la);
+    l.rotation.z = (u.front ? 0.08 : -0.1) + 0.7 * s;   // swing forward/back
+    u.knee.rotation.z = -((u.front ? 0.9 : 1.0) * Math.max(0, Math.sin(la + 2.2)) + 0.12);
+    u.s = s;
+  }
+  // suspension lift right after the hind push-off
+  const lift = 0.15 * Math.max(0, Math.sin(Math.PI * 2 * (f - 0.6)));
+  body.position.y = 1.5 + lift;
+  body.rotation.z = -0.06 + 0.09 * Math.sin(a + 0.9);   // gallop lean, rear up
+  body.rotation.x = 0.05 * Math.sin(a + 2.1);           // roll
+  neck.rotation.z = -0.55 + 0.08 * Math.sin(a + 1.2);
+  head.rotation.z = 0.55 + 0.12 * Math.sin(a + 1.7);    // head nod
+  head.rotation.y = 0.06 * Math.sin(a + 0.4);
+  head.rotation.x = 0.05 * Math.sin(a + 2.2);
+  ears.forEach((e, i) => { e.rotation.x = 0.25 * (i === 0 ? 1 : -1) + 0.08 * Math.sin(2 * a + i * 1.7); });
+  mane.forEach((m, i) => { m.rotation.x = 0.16 * Math.sin(2 * a + i * 0.8); });
+  tail.rotation.z = -1.55 - 0.18 * Math.sin(a + 0.7);
+  tailSegs.forEach((g, i) => {
+    g.rotation.z = 0.22 * Math.sin(a + 1.0 + i * 0.9) + 0.05 + 0.06 * i;
+    g.rotation.x = 0.12 * Math.sin(a + 0.5 + i * 0.7);
+  });
+  horse.updateMatrixWorld(true);
+  // hoof-fall / push-off bursts, exactly periodic with the gait
+  for (const l of legs) {
+    const u = l.userData, s = u.s;
+    if (u.prev > 0.45 && s <= 0.45) spawnDust(u.hoof, 3);
+    if (u.prev < -0.45 && s >= -0.45) spawnDust(u.hoof, 2);
+    u.prev = s;
+  }
+}
+
+/* ========================= camera ============================== */
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 200);
+function updateCamera(t) {
+  const la = Math.PI * 2 * t / LOOP;                 // one full orbit per loop
+  const r = 8.6 + 0.4 * Math.sin(2 * la + 2.3);
+  camera.position.set(Math.sin(la) * r, 3.1 + 0.35 * Math.sin(2 * la + 1.1), Math.cos(la) * r);
+  camera.lookAt(0, 1.15, 0);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ======================== main loop ============================ */
+const clock = new THREE.Clock();
+let tick = -1;
+const dot = document.getElementById('dot');
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  updateGait(t);
+  updateDust(dt);
+  gTex.offset.x = (SPEED * t / (120 / 16)) % 1;      // ground scroll
+  pat.position.x = -((SPEED * t) % P);               // scenery scroll
+  updateCamera(t);
+  const k = Math.floor(t / LOOP);
+  if (k !== tick) { tick = k; dot.classList.add('tick'); setTimeout(() => dot.classList.remove('tick'), 200); }
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

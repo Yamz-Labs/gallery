@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Low-Poly Gallop — procedural Three.js horse</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#16121e;font-family:ui-monospace,Menlo,Consolas,monospace}
+  #c{display:block;width:100%;height:100%}
+  .hud{position:fixed;color:#fffbe6;text-shadow:0 1px 3px rgba(0,0,0,.6);pointer-events:none;user-select:none}
+  #title{top:16px;left:18px;font-size:13px;letter-spacing:.14em;opacity:.92}
+  #title b{font-size:16px;letter-spacing:.22em}
+  #hint{bottom:14px;left:18px;font-size:11px;opacity:.5}
+  #stats{bottom:14px;right:18px;font-size:11px;opacity:.55;text-align:right}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud" id="title"><b>LOW-POLY GALLOP</b><br>procedural horse · three.js · seamless loop</div>
+<div class="hud" id="hint">drag: orbit &nbsp;·&nbsp; wheel: zoom &nbsp;·&nbsp; space: pause &nbsp;·&nbsp; ←/→: speed</div>
+<div class="hud" id="stats"></div>
+
+<script>
+/* =====================================================================
+   OFFLINE FALLBACK — a ~250-line WebGL renderer that implements exactly
+   the THREE-API subset this scene uses. If the three.js CDN is
+   unreachable, the page still renders (no shadows, tiny engine).
+   ===================================================================== */
+window.__miniThree = function(canvas){
+'use strict';
+const gl = canvas.getContext('webgl', {antialias:true});
+if(!gl) return null;
+
+/* ---------- color utils ---------- */
+const hexRGB = h => new Float32Array([((h>>16)&255)/255, ((h>>8)&255)/255, (h&255)/255]);
+
+/* ---------- math ---------- */
+const M4 = {
+  ident:()=>new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
+  mul(a,b){ const o=new Float32Array(16);
+    for(let c=0;c<4;c++)for(let r=0;r<4;r++)
+      o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];
+    return o; },
+  persp(fov,asp,n,f){ const t=1/Math.tan(fov/2), o=new Float32Array(16);
+    o[0]=t/asp;o[5]=t;o[10]=(f+n)/(n-f);o[11]=-1;o[14]=2*f*n/(n-f);return o; },
+  ortho(l,r,b,t,n,f){ const o=M4.ident();
+    o[0]=2/(r-l);o[5]=2/(t-b);o[10]=-2/(f-n);
+    o[12]=-(r+l)/(r-l);o[13]=-(t+b)/(t-b);o[14]=-(f+n)/(f-n);return o; },
+  lookAt(e,c,u){ let zx=e[0]-c[0],zy=e[1]-c[1],zz=e[2]-c[2];
+    const zl=Math.hypot(zx,zy,zz)||1; zx/=zl;zy/=zl;zz/=zl;
+    let xx=u[1]*zz-u[2]*zy, xy=u[2]*zx-u[0]*zz, xz=u[0]*zy-u[1]*zx;
+    const xl=Math.hypot(xx,xy,xz)||1; xx/=xl;xy/=xl;xz/=xl;
+    const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+    return new Float32Array([xx,yx,zx,0, xy,yy,zy,0, xz,yz,zz,0,
+      -(xx*e[0]+xy*e[1]+xz*e[2]), -(yx*e[0]+yy*e[1]+yz*e[2]), -(zx*e[0]+zy*e[1]+zz*e[2]), 1]); },
+  compose(p,r,s){
+    const cx=Math.cos(r[0]),sx=Math.sin(r[0]),cy=Math.cos(r[1]),sy=Math.sin(r[1]),cz=Math.cos(r[2]),sz=Math.sin(r[2]);
+    const a11=cy*cz, a12=cy*sz, a13=-sy;
+    const a21=sx*sy*cz-cx*sz, a22=sx*sy*sz+cx*cz, a23=sx*cy;
+    const a31=cx*sy*cz+sx*sz, a32=cx*sy*sz-sx*cz, a33=cx*cy;
+    const m=new Float32Array(16);
+    m[0]=a11*s[0]; m[1]=a21*s[0]; m[2]=a31*s[0];
+    m[4]=a12*s[1]; m[5]=a22*s[1]; m[6]=a32*s[1];
+    m[8]=a13*s[2]; m[9]=a23*s[2]; m[10]=a33*s[2];
+    m[12]=p[0]; m[13]=p[1]; m[14]=p[2]; m[15]=1;
+    return m; },
+  normalMat(w){
+    const a00=w[0],a01=w[1],a02=w[2],a10=w[4],a11=w[5],a12=w[6],a20=w[8],a21=w[9],a22=w[10];
+    const b01=a22*a11-a12*a21, b11=-a22*a10+a12*a20, b21=a21*a10-a11*a20;
+    let det=a00*b01+a01*b11+a02*b21; if(!det) return new Float32Array([1,0,0,0,1,0,0,0,1]);
+    det=1/det;
+    return new Float32Array([
+      b01*det, (-a22*a01+a02*a21)*det, (a12*a01-a02*a11)*det,
+      b11*det, (a22*a00-a02*a20)*det, (-a12*a00+a02*a10)*det,
+      b21*det, (-a21*a00+a01*a20)*det, (a11*a00-a01*a10)*det ]); },
+};
+
+/* ---------- scene graph ---------- */
+class Object3D{
+  constructor(){ this.position=vec3(); this.rotation=vec3(); this.scale=vec3(1,1,1);
+    this.children=[]; this.parent=null; this.visible=true; this.userData={}; this.matrix=M4.ident(); }
+  add(o){ o.parent=this; this.children.push(o); return this; }
+  updateWorld(pm){ this.matrix = pm ? M4.mul(pm, M4.compose(this.position,this.rotation,this.scale))
+                                    : M4.compose(this.position,this.rotation,this.scale);
+    for(const c of this.children) c.updateWorld(this.matrix); }
+}
+/* array with .x/.y/.z aliases so both .set() and .y= work */
+function vec3(x=0,y=0,z=0){ const a=[x,y,z];
+  Object.defineProperty(a,'x',{get:()=>a[0],set:v=>a[0]=v});
+  Object.defineProperty(a,'y',{get:()=>a[1],set:v=>a[1]=v});
+  Object.defineProperty(a,'z',{get:()=>a[2],set:v=>a[2]=v});
+  a.set=(v0,v1,v2)=>{a[0]=v0;a[1]=v1;a[2]=v2;return a;};
+  return a; }
+class Group extends Object3D{}
+
+/* ---------- geometry ---------- */
+class Geom{
+  constructor(pos,nrm){ this.attributes={position:{array:pos, count:pos.length/3,
+      getX(i){return this.array[i*3];}, getY(i){return this.array[i*3+1];}, getZ(i){return this.array[i*3+2];},
+      setXYZ(i,x,y,z){ this.array[i*3]=x; this.array[i*3+1]=y; this.array[i*3+2]=z; },
+      set needsUpdate(v){}}}
+    this._pos=this.attributes.position; this._nrm=nrm; this.count=pos.length/3; this._buf=null; }
+  upload(gl){ if(this._buf) return this._buf;
+    const p=this._pos.array, n=this._nrm, inter=new Float32Array(this.count*6);
+    for(let v=0;v<this.count;v++) for(let k=0;k<3;k++){
+      inter[v*6+k]=p[v*3+k]; inter[v*6+3+k]=n[v*3+k]; }
+    const b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.bufferData(gl.ARRAY_BUFFER,inter,gl.STATIC_DRAW);
+    this._buf=b; return b; }
+}
+function facetedPos(pos){
+  const nrm=new Float32Array(pos.length);
+  for(let i=0;i<pos.length;i+=9){
+    const ax=pos[i+3]-pos[i],ay=pos[i+4]-pos[i+1],az=pos[i+5]-pos[i+2];
+    const bx=pos[i+6]-pos[i],by=pos[i+7]-pos[i+1],bz=pos[i+8]-pos[i+2];
+    let nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+    const l=Math.hypot(nx,ny,nz)||1; nx/=l;ny/=l;nz/=l;
+    for(let k=0;k<3;k++){ nrm[i+k*3]=nx; nrm[i+k*3+1]=ny; nrm[i+k*3+2]=nz; }
+  }
+  return nrm;
+}
+class BoxGeometry extends Geom{
+  constructor(w,h,d){ const x=w/2,y=h/2,z=d/2; const p=[];
+    const q=(a,b,c,e)=>p.push(...a,...b,...c,...a,...c,...e);
+    q([x,-y,z],[x,-y,-z],[x,y,-z],[x,y,z]);
+    q([-x,-y,-z],[-x,-y,z],[-x,y,z],[-x,y,-z]);
+    q([-x,y,z],[x,y,z],[x,y,-z],[-x,y,-z]);
+    q([-x,-y,-z],[x,-y,-z],[x,-y,z],[-x,-y,z]);
+    q([-x,-y,z],[x,-y,z],[x,y,z],[-x,y,z]);
+    q([x,-y,-z],[-x,-y,-z],[-x,y,-z],[x,y,-z]);
+    super(new Float32Array(p), facetedPos(p)); } }
+class CylinderGeometry extends Geom{
+  constructor(rt,rb,h,seg){ const p=[],hy=h/2;
+    for(let i=0;i<seg;i++){ const a0=i/seg*2*Math.PI, a1=(i+1)/seg*2*Math.PI;
+      const c0=Math.cos(a0),s0=Math.sin(a0),c1=Math.cos(a1),s1=Math.sin(a1);
+      p.push(rb*c0,-hy,rb*s0, rb*c1,-hy,rb*s1, rt*c1,hy,rt*s1,
+             rb*c0,-hy,rb*s0, rt*c1,hy,rt*s1, rt*c0,hy,rt*s0); }
+    for(let i=0;i<seg;i++){ const a0=i/seg*2*Math.PI, a1=(i+1)/seg*2*Math.PI;
+      p.push(0,hy,0, rt*Math.cos(a0),hy,rt*Math.sin(a0), rt*Math.cos(a1),hy,rt*Math.sin(a1));
+      p.push(0,-hy,0, rb*Math.cos(a1),-hy,rb*Math.sin(a1), rb*Math.cos(a0),-hy,rb*Math.sin(a0)); }
+    super(new Float32Array(p), facetedPos(p)); } }
+class PlaneGeometry extends Geom{
+  constructor(w,h,sw,sh){ const p=[],x=w/2,z=h/2;
+    for(let iy=0;iy<sh;iy++)for(let ix=0;ix<sw;ix++){
+      const x0=-x+2*x*ix/sw, x1=-x+2*x*(ix+1)/sw, z0=-z+2*z*iy/sh, z1=-z+2*z*(iy+1)/sh;
+      p.push(x0,0,z0, x1,0,z0, x1,0,z1, x0,0,z0, x1,0,z1, x0,0,z1); }
+    super(new Float32Array(p), new Float32Array(p.length)); }
+  rotateX(a){ const p=this._pos.array, c=Math.cos(a), s=Math.sin(a);
+    for(let i=0;i<p.length;i+=3){ const y=p[i+1], z=p[i+2]; p[i+1]=y*c-z*s; p[i+2]=y*s+z*c; }
+    this._nrm = facetedPos(p); return this; } }
+class IcosahedronGeometry extends Geom{
+  constructor(r){ const t=(1+Math.sqrt(5))/2;
+    let v=[[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]];
+    v=v.map(a=>{const l=Math.hypot(...a);return a.map(c=>c/l*r);});
+    const f=[[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+             [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+    const p=[]; for(const a of f) p.push(...v[a[0]],...v[a[1]],...v[a[2]]);
+    super(new Float32Array(p), facetedPos(p)); } }
+class BufferGeometry extends Geom{
+  constructor(){ const a=new Float32Array(0); super(a, new Float32Array(0)); }
+  setAttribute(name, attr){ if(name==='position'){ this._pos=attr; this.attributes.position=attr; this.count=attr.count; this._nrm=null; } }
+  upload(){ return null; }
+}
+class BufferAttribute{
+  constructor(array,itemSize){ this.array=array; this.count=array.length/itemSize;
+    this.getX=i=>array[i*itemSize]; this.getY=i=>array[i*itemSize+1]; this.getZ=i=>array[i*itemSize+2];
+    this.setXYZ=(i,x,y,z)=>{ array[i*itemSize]=x; array[i*itemSize+1]=y; array[i*itemSize+2]=z; }; }
+  set needsUpdate(v){ this._dirty=true; }
+}
+
+/* ---------- objects / materials ---------- */
+class Mesh extends Object3D{
+  constructor(g,m){ super(); this.geometry=g; this.material=m; this.castShadow=false; this.receiveShadow=true; } }
+class Points extends Object3D{
+  constructor(g,m){ super(); this.geometry=g; this.material=m; } }
+class MeshStandardMaterial{
+  constructor(o={}){ this.color=hexRGB(o.color??0xffffff); this.roughness=o.roughness??1; this.metalness=o.metalness??0; this.flatShading=!!o.flatShading; } }
+class PointsMaterial{
+  constructor(o={}){ this.color=hexRGB(o.color??0xffffff); this.size=o.size??1; this.opacity=o.opacity??1; } }
+
+/* ---------- lights / scene / camera ---------- */
+const LIGHT = { dir:new Float32Array([0.45,-0.8,-0.35]), pos:[-9,15,6], target:[0,1,0],
+                color:[1.0,0.85,0.63], amb:[0.16,0.15,0.18], sky:[0.42,0.51,0.62], gnd:[0.35,0.27,0.19],
+                fog:[0.95,0.77,0.55], fogN:24, fogF:120 };
+class Light extends Object3D{ constructor(){ super(); } }
+class DirectionalLight extends Light{
+  constructor(c,i){ super(); this.color=hexRGB(c); this.intensity=i;
+    this.target=new Object3D();
+    this.shadow={mapSize:{set(){}},camera:{},bias:0};
+    LIGHT.ref=this;
+    LIGHT.color=[this.color[0]*0.95,this.color[1]*0.82,this.color[2]*0.6]; }
+}
+class HemisphereLight extends Light{ constructor(s,g,i){ super(); LIGHT.sky=hexRGB(s); LIGHT.gnd=hexRGB(g); } }
+class AmbientLight extends Light{ constructor(c,i){ super(); const r=hexRGB(c); LIGHT.amb=[r[0]*0.3,r[1]*0.28,r[2]*0.34]; } }
+class Scene extends Object3D{ constructor(){ super(); this.fog=null; this.userData={}; } }
+class Fog{ constructor(c,n,f){ LIGHT.fog=hexRGB(c); LIGHT.fogN=n; LIGHT.fogF=f; } }
+class Color{ constructor(h){ const r=hexRGB(h); this.r=r[0];this.g=r[1];this.b=r[2]; } }
+class Vector3{
+  constructor(x=0,y=0,z=0){this.x=x;this.y=y;this.z=z;}
+  set(x,y,z){this.x=x;this.y=y;this.z=z;return this;}
+  copy(v){this.x=v.x;this.y=v.y;this.z=v.z;return this;}
+  add(v){this.x+=v.x;this.y+=v.y;this.z+=v.z;return this;}
+  setFromSphericalCoords(r,phi,theta){ const sp=Math.sin(phi);
+    this.x=r*sp*Math.sin(theta); this.y=r*Math.cos(phi); this.z=r*sp*Math.cos(theta); return this; } }
+class PerspectiveCamera extends Object3D{
+  constructor(fov,asp,n,f){ super(); this.fov=fov; this.aspect=asp; this.near=n; this.far=f;
+    this.position=new Vector3(); this.target=new Vector3(); }
+  lookAt(v){ this.target.copy(v); }
+  updateProjectionMatrix(){} }
+class Clock{ constructor(){ this._t=winNow(); }
+  getDelta(){ const n=winNow(), d=n-this._t; this._t=n; return d; } }
+function winNow(){ return window.__now ? window.__now() : performance.now()/1000; }
+
+/* ---------- shaders ---------- */
+function prog(vs,fs){ const c=(t,s)=>{const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh;};
+  const p=gl.createProgram(); gl.attachShader(p,c(gl.VERTEX_SHADER,vs)); gl.attachShader(p,c(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u={}; const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(let i=0;i<n;i++){ const nm=gl.getActiveUniform(p,i).name.replace('[0]',''); u[nm]=gl.getUniformLocation(p,nm); }
+  return {p,u}; }
+
+const mainP = prog(`
+attribute vec3 aPos; attribute vec3 aNor;
+uniform mat4 uVP; uniform mat4 uM; uniform mat3 uNM;
+varying vec3 vN; varying vec3 vW;
+void main(){ vec4 w=uM*vec4(aPos,1.0); vW=w.xyz; vN=normalize(uNM*aNor); gl_Position=uVP*w; }`,
+`precision mediump float;
+varying vec3 vN; varying vec3 vW;
+uniform vec3 uColor;
+uniform vec3 uLDir,uLCol,uAmb,uSky,uGnd,uFog; uniform float uFogN,uFogF;
+void main(){
+  vec3 N=normalize(vN); vec3 L=normalize(-uLDir);
+  float ndl=max(dot(N,L),0.0);
+  float d=length(vW);
+  vec3 hemi=mix(uGnd,uSky,N.y*0.5+0.5);
+  vec3 col=uColor*(uAmb+hemi*0.55+uLCol*ndl);
+  float f=clamp((d-uFogN)/(uFogF-uFogN),0.0,1.0);
+  col=mix(col,uFog,f*f);
+  gl_FragColor=vec4(pow(col,vec3(0.92)),1.0);
+}`);
+const skyP = prog(`
+varying vec2 vUv; attribute vec2 aP;
+void main(){ vUv=aP*0.5+0.5; gl_Position=vec4(aP,0.999,1.0); }`,
+`precision mediump float; varying vec2 vUv; uniform vec3 uTop,uBot;
+void main(){ gl_FragColor=vec4(pow(mix(uBot,uTop,pow(clamp(vUv.y*1.35+0.12,0.0,1.0),0.75)),vec3(0.92)),1.0); }`);
+const ptsP = prog(`
+attribute vec3 aPos; uniform mat4 uVP; varying float vY;
+void main(){ vY=aPos.y; gl_Position=uVP*vec4(aPos,1.0); gl_PointSize=5.0; }`,
+`precision mediump float; varying float vY; uniform vec3 uColor;
+void main(){ if(vY<0.0) discard; gl_FragColor=vec4(uColor,0.5); }`);
+
+const skyBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 3,-1, -1,3]),gl.STATIC_DRAW);
+
+function collect(root){ const list=[];
+  (function walk(o){ if(!o.visible) return;
+    if(o instanceof Mesh || o instanceof Points) list.push(o);
+    for(const c of o.children) walk(c); })(root);
+  return list; }
+
+/* ---------- renderer ---------- */
+const renderer = {
+  shadowMap:{enabled:false}, outputColorSpace:'srgb',
+  setPixelRatio(){}, 
+  setSize(w,h){ canvas.width=w*Math.min(devicePixelRatio||1,2); canvas.height=h*Math.min(devicePixelRatio||1,2); },
+  render(scene, camera){
+    scene.updateWorld(null);
+    const W=canvas.width, H=canvas.height;
+    const eye=[camera.position.x,camera.position.y,camera.position.z];
+    const view=M4.lookAt(eye,[camera.target.x,camera.target.y,camera.target.z],[0,1,0]);
+    const proj=M4.persp(camera.fov*Math.PI/180, W/H, 0.1, 400);
+    const vp=M4.mul(proj,view);
+
+    const ref = LIGHT.ref;
+    const lp = ref ? ref.position : [-9,15,6];
+    const lt = ref ? ref.target.position : [0,1,0];
+    const ldir=[lt[0]-lp[0],lt[1]-lp[1],lt[2]-lp[2]];
+    const ll=Math.hypot(...ldir); LIGHT.dir.set([ldir[0]/ll,ldir[1]/ll,ldir[2]/ll]);
+
+    gl.viewport(0,0,W,H);
+    gl.clearColor(0.87,0.71,0.51,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND);
+
+    /* sky */
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(skyP.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER,skyBuf);
+    const ap=gl.getAttribLocation(skyP.p,'aP');
+    gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap,2,gl.FLOAT,false,0,0);
+    const top=(scene.userData.skyTop!==undefined)?hexRGB(scene.userData.skyTop):new Float32Array([0.25,0.5,0.68]);
+    gl.uniform3fv(skyP.u.uTop,top);
+    gl.uniform3fv(skyP.u.uBot,LIGHT.fog);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+    gl.enable(gl.DEPTH_TEST);
+
+    /* meshes */
+    gl.useProgram(mainP.p);
+    gl.uniformMatrix4fv(mainP.u.uVP,false,vp);
+    gl.uniform3fv(mainP.u.uLDir,LIGHT.dir); gl.uniform3fv(mainP.u.uLCol,LIGHT.color);
+    gl.uniform3fv(mainP.u.uAmb,LIGHT.amb); gl.uniform3fv(mainP.u.uSky,LIGHT.sky); gl.uniform3fv(mainP.u.uGnd,LIGHT.gnd);
+    gl.uniform3fv(mainP.u.uFog,LIGHT.fog); gl.uniform1f(mainP.u.uFogN,LIGHT.fogN); gl.uniform1f(mainP.u.uFogF,LIGHT.fogF);
+    const objs=collect(scene);
+    for(const o of objs){ if(!(o instanceof Mesh)) continue;
+      gl.bindBuffer(gl.ARRAY_BUFFER,o.geometry.upload(gl));
+      const lp=gl.getAttribLocation(mainP.p,'aPos'), ln=gl.getAttribLocation(mainP.p,'aNor');
+      gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,3,gl.FLOAT,false,24,0);
+      gl.enableVertexAttribArray(ln); gl.vertexAttribPointer(ln,3,gl.FLOAT,false,24,12);
+      gl.uniformMatrix4fv(mainP.u.uM,false,o.matrix);
+      gl.uniformMatrix3fv(mainP.u.uNM,false,M4.normalMat(o.matrix));
+      gl.uniform3fv(mainP.u.uColor,o.material.color);
+      gl.drawArrays(gl.TRIANGLES,0,o.geometry.count); }
+
+    /* points */
+    gl.useProgram(ptsP.p);
+    gl.uniformMatrix4fv(ptsP.u.uVP,false,vp);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+    for(const o of objs){ if(!(o instanceof Points)) continue;
+      const g=o.geometry;
+      if(!g._pbuf){ g._pbuf=gl.createBuffer(); g._dirty=true; }
+      gl.bindBuffer(gl.ARRAY_BUFFER,g._pbuf);
+      gl.bufferData(gl.ARRAY_BUFFER,g._pos.array,gl.DYNAMIC_DRAW);
+      const la=gl.getAttribLocation(ptsP.p,'aPos');
+      gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la,3,gl.FLOAT,false,0,0);
+      gl.uniform3fv(ptsP.u.uColor,o.material.color);
+      gl.drawArrays(gl.POINTS,0,g.count); }
+    gl.depthMask(true); gl.disable(gl.BLEND);
+  }
+};
+renderer.shadowMap.enabled=false;
+
+return { Object3D, Group, Mesh, Points, BufferGeometry, BufferAttribute,
+  BoxGeometry, CylinderGeometry, PlaneGeometry, IcosahedronGeometry, SphereGeometry:BoxGeometry,
+  MeshStandardMaterial, PointsMaterial, DirectionalLight, HemisphereLight, AmbientLight,
+  Scene, Fog, Color, Vector3, PerspectiveCamera, Clock, WebGLRenderer: function(){ return renderer; },
+  __isMini:true };
+};
+</script>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+/* Use three.js from CDN; fall back to the embedded mini renderer offline. */
+let THREE = null;
+try { THREE = await import('three'); } catch(e){ /* offline */ }
+if(!THREE || !THREE.WebGLRenderer){
+  THREE = window.__miniThree(document.getElementById('c'));
+  document.getElementById('title').innerHTML += '<br><small>offline fallback renderer</small>';
+}
+
+/* ============================== core ============================== */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+if(renderer.shadowMap) renderer.shadowMap.enabled = true;
+if(THREE.PCFSoftShadowMap) renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+if(THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const FOG_HEX = 0xf2c48d;
+if(THREE.Fog) scene.fog = new THREE.Fog(FOG_HEX, 24, 120);
+scene.userData.skyTop = 0x3f7fae;
+scene.userData.skyBot = FOG_HEX;
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.1, 400);
+
+/* gradient sky dome (real three.js path) */
+if(!THREE.__isMini){
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite:false, fog:false,
+    uniforms:{ top:{value:new THREE.Color(0x3f7fae)}, bot:{value:new THREE.Color(FOG_HEX)} },
+    vertexShader:'varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader:'uniform vec3 top,bot; varying vec3 vP; void main(){ float h=clamp(normalize(vP).y*1.35+0.12,0.0,1.0); gl_FragColor=vec4(mix(bot,top,pow(h,0.75)),1.0); }'
+  });
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(220, 12, 8), mat));
+}
+
+/* lights */
+const sun = new THREE.DirectionalLight(0xffd9a0, 2.7);
+sun.position.set(-9, 15, 6);
+sun.castShadow = true;
+if(sun.shadow.mapSize) sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, {left:-11, right:11, top:11, bottom:-11, near:2, far:70});
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+scene.add(sun.target);
+scene.add(new THREE.HemisphereLight(0xbfd9ef, 0x8a6a48, 0.9));
+scene.add(new THREE.AmbientLight(0x6a5a66, 0.35));
+
+/* ======================= helpers / geometry ======================= */
+const rng = (() => { let s = 987654321; return () => { s = (s*16807) % 2147483647; return (s-1)/2147483646; }; })();
+
+function jitter(geo, amp){
+  if(!amp) return geo;
+  const p = geo.attributes.position;
+  for(let i=0;i<p.count;i++)
+    p.setXYZ(i, p.getX(i)+(rng()*2-1)*amp, p.getY(i)+(rng()*2-1)*amp, p.getZ(i)+(rng()*2-1)*amp);
+  p.needsUpdate = true;
+  return geo;
+}
+const faceted = g => (g.toNonIndexed ? g.toNonIndexed() : g);
+const mat = (color, rough=0.85) => new THREE.MeshStandardMaterial({ color, roughness:rough, metalness:0.02, flatShading:true });
+
+function boxPart(w,h,d,matl,{x=0,y=0,z=0,rx=0,ry=0,rz=0,jit=0,parent=null}={}){
+  const m = new THREE.Mesh(faceted(jitter(new THREE.BoxGeometry(w,h,d), jit)), matl);
+  m.position.set(x,y,z); m.rotation.set(rx,ry,rz);
+  m.castShadow = true; m.receiveShadow = true;
+  (parent||scene).add(m);
+  return m;
+}
+function cylPart(rt,rb,h,seg,matl,{x=0,y=0,z=0,rx=0,ry=0,rz=0,parent=null}={}){
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg), matl);
+  m.position.set(x,y,z); m.rotation.set(rx,ry,rz);
+  m.castShadow = true; m.receiveShadow = true;
+  (parent||scene).add(m);
+  return m;
+}
+/* group placed at a joint; children hang downward from the joint */
+function joint(x,y,z,parent){ const g = new THREE.Group(); g.position.set(x,y,z); parent.add(g); return g; }
+
+/* ============================== palette ============================== */
+const COAT  = mat(0xa9744b);
+const COATD = mat(0x7d5232);
+const BELLY = mat(0x8a5f3d);
+const MANE  = mat(0x3d2817);
+const HOOF  = mat(0x2c2119, 0.6);
+const MUZZ  = mat(0x54402f);
+const EYE   = mat(0x120d0a, 0.35);
+const TAIL  = mat(0x35220f);
+
+/* ============================== horse ==============================
+   Local frame: +z = forward, +x = horse's left, y up.
+   Legs hang from joint pivots; hooves end flush with ground (y≈0).  */
+const horse = new THREE.Group();
+scene.add(horse);
+
+/* torso: chest z .36..1.36 | barrel -.44...48 | hindquarters -1.13..-.35 */
+boxPart(0.86, 0.80, 1.00, COAT,  {x:0, y:1.34, z:0.86, rx:-0.06, jit:0.035});   // chest
+boxPart(0.76, 0.62, 0.92, BELLY, {x:0, y:1.26, z:0.02, jit:0.03});              // barrel
+boxPart(0.90, 0.84, 0.78, COAT,  {x:0, y:1.44, z:-0.74, rx:0.06, jit:0.035});   // hindquarters
+boxPart(0.62, 0.24, 2.06, COATD, {x:0, y:1.70, z:0.10, jit:0.025});             // topline/withers
+boxPart(0.26, 0.16, 0.80, COATD, {x:0, y:1.05, z:-0.75, jit:0.015});            // belly seam
+
+/* neck & head (pivot at withers) */
+const headRoot = joint(0, 1.78, 1.30, horse);
+cylPart(0.17, 0.33, 0.88, 5, COAT, { y:0.29, z:0.34, rx:0.86, parent:headRoot });        // neck
+boxPart(0.26, 0.30, 0.44, COAT, {x:0, y:0.58, z:0.68, rx:0.38, jit:0.02, parent:headRoot}); // skull
+boxPart(0.19, 0.19, 0.36, MUZZ, {x:0, y:0.50, z:1.00, rx:0.16, jit:0.015, parent:headRoot}); // muzzle
+boxPart(0.06, 0.09, 0.10, EYE,  {x: 0.135, y:0.64, z:0.70, parent:headRoot});
+boxPart(0.06, 0.09, 0.10, EYE,  {x:-0.135, y:0.64, z:0.70, parent:headRoot});
+const earL = boxPart(0.08, 0.20, 0.06, MANE, {x: 0.11, y:0.80, z:0.50, rz:-0.16, parent:headRoot});
+const earR = boxPart(0.08, 0.20, 0.06, MANE, {x:-0.11, y:0.80, z:0.50, rz: 0.16, parent:headRoot});
+/* mane along the crest */
+for(let i=0;i<6;i++){
+  const t = i/5;
+  boxPart(0.09, 0.26-0.07*t, 0.20, MANE, {
+    x:0, y:0.10+0.58*t, z:-0.16+0.72*t, rx:-0.45+0.25*t, parent:headRoot
+  });
+}
+
+/* tail: chain of 6 pivots curving back and down */
+const tailRoot = joint(0, 1.66, -1.08, horse);
+const tailSegs = [];
+{
+  let parent = tailRoot;
+  for(let i=0;i<6;i++){
+    const g = joint(0, i===0?0:-0.15, i===0?0:-0.04, parent);
+    cylPart(0.085-0.011*i, 0.095-0.011*i, 0.17, 5, TAIL, { y:-0.08, parent:g });
+    tailSegs.push(g); parent = g;
+  }
+}
+
+/* legs: hip -> knee -> ankle -> toe pivots, segment lengths .48/.42/.30 */
+function makeLeg(x, zF, isFront){
+  const hip = joint(x, isFront?1.26:1.30, zF, horse);
+  boxPart(0.21, 0.52, isFront?0.26:0.30, COAT,  {x:0, y:-0.26, jit:0.015, parent:hip});
+  const knee  = joint(0, -0.48, isFront?0.03:-0.04, hip);
+  boxPart(0.16, 0.42, 0.18, COATD, {x:0, y:-0.21, jit:0.01, parent:knee});
+  const ankle = joint(0, -0.42, 0, knee);
+  boxPart(0.11, 0.30, 0.12, COATD, {x:0, y:-0.15, jit:0.008, parent:ankle});
+  const toe   = joint(0, -0.30, 0, ankle);
+  boxPart(0.17, 0.13, 0.24, HOOF,  {x:0, y:-0.05, z:0.03, parent:toe});
+  return { hip, knee, ankle, toe, __paw:0 };
+}
+const legs = [
+  makeLeg( 0.30,  0.94, true),   // FR
+  makeLeg(-0.30,  0.94, true),   // FL
+  makeLeg( 0.30, -0.86, false),  // RR
+  makeLeg(-0.30, -0.86, false),  // RL
+];
+
+/* ====================== ground / scenery ====================== */
+const GROUND_Y = -0.04;
+const P = 16.66;                       // ground noise period (m) -> exact tiling
+const ground = new THREE.Mesh(
+  (() => {
+    const g = new THREE.PlaneGeometry(170, 100, 22, 14);
+    const p = g.attributes.position;
+    for(let i=0;i<p.count;i++){
+      const x = p.getX(i), z = p.getZ(i);
+      const h = 0.05*Math.sin(2*Math.PI*z/P + x*0.33)
+              + 0.04*Math.sin(4*Math.PI*z/P + x*0.21 + 1.7)
+              + 0.03*Math.sin(4*Math.PI*z/P + x*0.9 + 4.1);
+      p.setZ ? p.setZ(i, h) : p.setXYZ(i, x, p.getY(i), h);
+    }
+    g.rotateX(-Math.PI/2);
+    return g;
+  })(),
+  mat(0x8f7a4e, 0.95)
+);
+ground.position.y = GROUND_Y;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* scenery pools — recycled along z for a seamlessly scrolling world */
+function makePool(count, builder){
+  const items = [];
+  for(let i=0;i<count;i++){ const g = builder(); g.visible = false; scene.add(g); items.push(g); }
+  return items;
+}
+const trees = makePool(9, () => {
+  const g = new THREE.Group();
+  const s = 0.7 + rng()*0.9;
+  cylPart(0.09*s, 0.14*s, 1.1*s, 5, mat(0x5a4028), {y:0.55*s, parent:g});
+  boxPart(1.1*s, 1.5*s, 1.1*s, mat(0x4c6b36), {y:1.7*s, ry:rng()*2, jit:0.12*s, parent:g});
+  boxPart(0.7*s, 0.9*s, 0.7*s, mat(0x5d7d40), {y:2.5*s, ry:rng()*2, jit:0.09*s, parent:g});
+  return g;
+});
+const rocks = makePool(10, () => {
+  const s = 0.25 + rng()*0.6;
+  const m = new THREE.Mesh(faceted(jitter(new THREE.IcosahedronGeometry(s, 0), s*0.18)), mat(0x7d7466));
+  m.scale.y = 0.65; m.position.y = s*0.4; m.rotation.y = rng()*3;
+  m.castShadow = true; m.receiveShadow = true;
+  const g = new THREE.Group(); g.add(m); return g;
+});
+const tufts = makePool(26, () => {
+  const g = new THREE.Group();
+  const n = 2 + (rng()*3|0);
+  for(let i=0;i<n;i++){
+    const h = 0.18 + rng()*0.22;
+    boxPart(0.05, h, 0.05, mat(0x9c8a4e), {x:(rng()-0.5)*0.25, y:h/2, z:(rng()-0.5)*0.25, rz:(rng()-0.5)*0.5, parent:g});
+  }
+  return g;
+});
+function placeScatter(list, minAbs, spread){
+  for(const g of list){
+    const side = rng() < 0.5 ? -1 : 1;
+    g.position.set(side*(minAbs + rng()*20), 0, (rng()*2-1)*spread);
+  }
+}
+placeScatter(trees, 6.5, 100);
+placeScatter(rocks, 4.5, 100);
+placeScatter(tufts, 1.6, 60);
+
+/* dust puffs kicked up at paw-down, recycled with the world */
+const DUST_N = 70, DUST_RANGE = 16;
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(DUST_N*3).fill(0);
+const dust = [];
+for(let i=0;i<DUST_N;i++){ dust.push({ x:0, y:-9, z:-99, vy:0, life:1 }); dustPos[i*3+1] = -9; }
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dustPts = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+  color:0xcbb083, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.55, depthWrite:false
+}));
+scene.add(dustPts);
+let dustIdx = 0;
+function spawnDust(x, z){
+  const d = dust[dustIdx]; dustIdx = (dustIdx+1) % DUST_N;
+  d.x = x + (rng()-0.5)*0.25; d.z = z + (rng()-0.5)*0.25;
+  d.y = 0.04 + rng()*0.05; d.vy = 0.5 + rng()*0.7; d.life = 0;
+}
+
+/* ============================ gait ============================
+   Transverse gallop, footfall order FR -> FL -> RR -> RL.
+   Every channel is a 1-periodic function of cycle phase => the
+   animation loops seamlessly (identical pose every G.period seconds). */
+const D2R = Math.PI/180;
+const G = {
+  period: 0.64,       // s per full stride
+  speed:  11.5,       // world units / s
+  off: [0, 0.12, 0.5, 0.62],          // FR FL RR RL footfall offsets
+  hipA: [24, 24, 28, 28],  hipC: [-4, -4, 2, 2],
+  kneeMin: [4, 4, -6, -6], kneeMax: [85, 85, -48, -48],
+  ankMin:  [0, 0, 10, 10], ankMax:  [28, 28, 78, 78],
+  toeMax:  [25, 25, 35, 35],
+  bounce: 0.10, pitch: 3.2*D2R, head: 5.5*D2R, tail: 10*D2R,
+};
+const lerp = (a,b,t)=>a+(b-a)*t;
+const ssin = (p,o)=>0.5-0.5*Math.cos(2*Math.PI*(p+o));   // soft 0..1..0
+const slin = (p,o)=>Math.sin(2*Math.PI*(p+o));           // soft +/-1
+
+/* ============================ loop ============================ */
+const clock = new THREE.Clock();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _t = new THREE.Vector3(), _s = new THREE.Vector3();
+const statsEl = document.getElementById('stats');
+let simT = 0, speedMul = 1, paused = false;
+
+function animate(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  step(dt);
+  requestAnimationFrame(animate);
+}
+
+function step(dt){
+  if(!paused) simT += dt * speedMul;
+
+  const cyc = simT / G.period;
+  const ph = cyc % 1;
+
+  /* body: one bounce + pitch rock per stride */
+  horse.position.y = G.bounce * slin(ph, 0.08);
+  horse.rotation.x = G.pitch  * slin(ph, 0.33);
+
+  /* neck & head counter-bob, ear twitch */
+  headRoot.rotation.x = -0.10 + G.head * slin(ph, 0.55);
+  headRoot.rotation.z = 0.05 * slin(ph, 0.0);
+  earL.rotation.x = 0.12*ssin(ph,0.4); earR.rotation.x = 0.12*ssin(ph,0.45);
+
+  /* tail streaming behind (rotation.x>0 leans back), side-to-side at stride rate */
+  tailRoot.rotation.x = 1.15 + G.tail*0.45*ssin(ph,0.2);
+  tailRoot.rotation.z = 0.18*ssin(ph,0.0);
+  for(let i=0;i<tailSegs.length;i++){
+    tailSegs[i].rotation.x = 0.22 + 0.12*ssin(ph, 0.15 + i*0.06);
+    tailSegs[i].rotation.z = 0.15*ssin(ph, i*0.09);
+  }
+
+  /* legs */
+  for(let i=0;i<4;i++){
+    const L = legs[i], f = i<2;
+    const p = (ph + G.off[i]) % 1;
+    const tuck = ssin(p, 0.30);
+    L.hip.rotation.x  = (G.hipA[i]*slin(p, 0.62) + G.hipC[i]) * D2R;
+    L.hip.rotation.y  = (i%2? 1:-1) * (f? 0.02 : 0.035);
+    L.knee.rotation.x = lerp(G.kneeMin[i], G.kneeMax[i], tuck) * D2R;
+    L.ankle.rotation.x= lerp(G.ankMin[i],  G.ankMax[i],  tuck) * D2R;
+    L.toe.rotation.x  = G.toeMax[i] * ssin(p, 0.35) * D2R;
+
+    /* dust on paw-down (toe angle snapping back) */
+    if(!paused && dt>0){
+      const paw = G.toeMax[i] * ssin(p, 0.35) * D2R;
+      const dpaw = (paw - L.__paw)/dt;
+      L.__paw = paw;
+      if(dpaw < -2.5 && Math.random() < 0.9){
+        if(L.hip.getWorldPosition) L.hip.getWorldPosition(_v);
+        else { _v.x=L.hip.position.x; _v.z=L.hip.position.z; }
+        spawnDust(_v.x, _v.z + (f?0.2:-0.1));
+      }
+    }
+  }
+
+  /* world scroll: ground tiles exactly every P units; props recycle */
+  const dz = G.speed * speedMul * (paused?0:dt);
+  ground.position.z = (ground.position.z + dz) % P;
+  const scroll = (list, range) => { for(const g of list){ g.position.z += dz; if(g.position.z > range) g.position.z -= 2*range; } };
+  scroll(trees, 100); scroll(rocks, 100); scroll(tufts, 60);
+
+  /* dust update */
+  for(let i=0;i<DUST_N;i++){
+    const d = dust[i];
+    if(d.life < 1){
+      d.life += dt*1.7; d.y += d.vy*dt; d.vy *= 0.96; d.z -= dz;
+      if(d.z < -DUST_RANGE) d.life = 1;
+      dustPos[i*3] = d.x; dustPos[i*3+1] = d.y; dustPos[i*3+2] = d.z;
+    } else { dustPos[i*3+1] = -9; }
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+
+  /* camera: fixed rig + orbit/zoom offsets + gentle handheld sway */
+  const sw = { x: 0.10*Math.sin(2*Math.PI*cyc/4.7), y: 0.06*Math.sin(2*Math.PI*cyc/6.3+1.7) };
+  const target = _t.set(0, 1.28 + sw.y*0.3, 0.25);
+  camera.position.copy(target)
+    .add(_s.setFromSphericalCoords(camDist, camPhi, camTheta))
+    .add(_v2.set(sw.x*0.3, sw.y, 0));
+  camera.lookAt(target);
+
+  renderer.render(scene, camera);
+  statsEl.textContent = `${cyc.toFixed(1)} strides · ${(G.speed*speedMul).toFixed(1)} u/s${paused?' · paused':''}`;
+}
+window.__step = dt => step(dt);
+window.__ready = true;
+
+/* ============================ controls ============================ */
+let camTheta = -1.35, camPhi = 1.42, camDist = 9.2;
+let dragging = false, px=0, py=0;
+canvas.addEventListener('pointerdown', e=>{ dragging=true; px=e.clientX; py=e.clientY; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  camTheta -= (e.clientX-px)*0.006;
+  camPhi = Math.min(1.52, Math.max(0.55, camPhi - (e.clientY-py)*0.005));
+  px=e.clientX; py=e.clientY;
+});
+addEventListener('pointerup', ()=>dragging=false);
+canvas.addEventListener('wheel', e=>{ camDist = Math.min(24, Math.max(4, camDist*(1+e.deltaY*0.001))); e.preventDefault(); }, {passive:false});
+addEventListener('keydown', e=>{
+  if(e.code==='Space'){ paused=!paused; e.preventDefault(); }
+  if(e.code==='ArrowRight') speedMul = Math.min(2, speedMul+0.1);
+  if(e.code==='ArrowLeft')  speedMul = Math.max(0.2, speedMul-0.1);
+});
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+if(!location.hash.match(/^#f\d+/)) animate();   // test mode starts its own loop
+
+/* headless test driver: file://...horse.html#f<N> advances N fixed steps up
+   front; the normal rAF loop keeps painting so screenshots see a stable pose. */
+{
+  const m = location.hash.match(/^#f(\d+)/);
+  if(m){
+    const N = +m[1];
+    const t = setInterval(()=>{
+      if(!window.__ready) return;
+      clearInterval(t);
+      for(let i=0;i<N;i++) window.__step(1/60);
+      document.title = 'frames:'+N;
+      animate();
+    }, 40);
+  }
+}
+</script>
+</body>
+</html>
